@@ -1,0 +1,4 @@
+# odyssey-web 이미지 전용 (루트 .dockerignore 대신 적용됨): Nginx 설정과 프론트만 넣는다.
+*
+!nginx/default.conf
+!frontend/
