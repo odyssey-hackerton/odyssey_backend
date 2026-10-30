@@ -141,14 +141,18 @@ docker compose exec postgres psql -U odyssey -d odyssey
 
 ## API
 
+자세한 요청·응답 형식과 예시는 Swagger 문서(`http://10.1.1.27/docs`)에 있습니다.
+
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| `POST` | `/api/jobs` | `multipart/form-data`로 `file`(jpg·png·webp, 10MB 이하) 또는 `text` 중 하나. `202` + `job_id` |
+| `POST` | `/api/jobs` | `multipart/form-data`로 `file`(jpg·png·webp, 10MB 이하), `text`(5,000자 이하), 또는 둘 다. `202` + `job_id` |
 | `GET` | `/api/jobs/{id}` | 현재 상태 (`QUEUED` `DETECTING` `ANALYZING` `TRANSFORMING` `VERIFYING` `DONE` `FAILED`) |
 | `GET` | `/api/jobs/{id}/events` | SSE. 상태가 바뀔 때마다 `progress`, 끝나면 `done` 이벤트 |
-| `GET` | `/api/jobs/{id}/result` | 이미지: presigned URL(5분), 텍스트: 마스킹된 텍스트. 완료 전이면 `409` |
+| `GET` | `/api/jobs/{id}/result` | 이미지: presigned URL(5분), 글: 가린 글, 사진 + 글: 둘 다. 완료 전이면 `409` |
 | `GET` | `/api/jobs/{id}/report` | 위험도 전후, 탐지 항목, 반복 횟수 |
 | `GET` | `/api/health` | DB·Redis 확인. `?deep=true`면 S3까지 |
+
+입력 종류(`input_type`)는 보낸 필드로 정해집니다. `file`만 보내면 `image`, `text`만 보내면 `text`, 둘 다 보내면 `image_text`입니다. `image_text`는 사진과 글(예: 게시물 사진과 본문)을 AI가 한 작업에서 함께 분석하고, 결과도 처리된 이미지와 가린 글을 함께 돌려줍니다.
 
 프론트 예시:
 

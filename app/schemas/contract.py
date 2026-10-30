@@ -7,6 +7,13 @@ AI 쪽은 모델과 로직이 자주 바뀌므로 아래 규칙으로 변경에 
 - 필드 삭제·이름 변경처럼 깨지는 변경만 schema_version 을 올리고 두 레포를 함께 수정한다.
 
 Redis Stream 메시지는 {"payload": <JSON 문자열>} 하나의 필드로 주고받는다.
+
+입력 종류(input_type)
+- image:      사진만.      object_key 있음, text 없음
+- text:       글만.        object_key 없음, text 있음
+- image_text: 사진 + 글.   object_key, text 둘 다 있음 (예: SNS 게시물 사진과 본문)
+  → 워커는 두 입력을 한 작업에서 함께 분석하고, 결과도 result_object_key 와
+    result_text 를 함께 채워 보낸다.
 """
 
 from datetime import datetime
@@ -40,14 +47,17 @@ class JobOptions(ContractModel):
     max_iterations: int = 3
 
 
+InputType = Literal["image", "text", "image_text"]
+
+
 class JobMessage(ContractModel):
     """jobs stream (API → 워커)"""
 
     schema_version: int = SCHEMA_VERSION
     job_id: UUID
-    input_type: Literal["image", "text"]
-    object_key: str | None = None
-    text: str | None = None
+    input_type: InputType
+    object_key: str | None = None  # 원본 이미지 S3 키 (image, image_text)
+    text: str | None = None  # 원본 글 (text, image_text). Postgres에는 저장하지 않는다.
     options: JobOptions = Field(default_factory=JobOptions)
     created_at: datetime
 
@@ -74,8 +84,8 @@ class ResultMessage(ContractModel):
     risk_before: float | None = None
     risk_after: float | None = None
     iterations: int = 0
-    result_object_key: str | None = None
-    result_text: str | None = None
+    result_object_key: str | None = None  # 처리된 이미지 S3 키 (image, image_text)
+    result_text: str | None = None  # 처리된 글 (text, image_text)
     findings: list[Finding] = Field(default_factory=list)
     details: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
