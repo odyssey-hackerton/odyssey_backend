@@ -39,7 +39,7 @@ print_branch_help() {
   브랜치 이름 규칙: <type>/<이슈번호>-<짧은-설명>   (이슈번호 선택, 소문자·숫자·하이픈만)
     type: feature fix refactor docs chore test ci hotfix
     release는 release/v1.0.0 형식
-  예) feature/12-upload-api, fix/sse-reconnect, hotfix/minio-timeout
+  예) feature/12-upload-api, fix/sse-reconnect, hotfix/s3-timeout
   자세한 내용: CONTRIBUTING.md
 HELP
 }
