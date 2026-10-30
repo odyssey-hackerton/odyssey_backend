@@ -71,42 +71,41 @@ async def process(redis: Redis, storage: Storage, msg: JobMessage) -> ResultMess
     if random.random() < FAIL_RATE:
         return ResultMessage(job_id=msg.job_id, status="FAILED", error="mock failure")
 
-    if msg.input_type == "image":
+    # image_text 는 이미지와 글을 모두 처리해서 결과 두 개를 함께 보낸다.
+    result_object_key = None
+    findings: list[dict] = []
+    if msg.input_type in ("image", "image_text"):
         original = await storage.get(msg.object_key)
-        key = result_key(job_id, "jpg")
-        await storage.put(key, await asyncio.to_thread(blur_image, original), "image/jpeg")
-        return ResultMessage(
-            job_id=msg.job_id,
-            status="DONE",
-            risk_detected=True,
-            risk_before=0.82,
-            risk_after=0.12,
-            iterations=1,
-            result_object_key=key,
-            findings=[
-                {
-                    "type": "address",
-                    "source": "ocr",
-                    "bbox": [40, 60, 320, 110],
-                    "score": 0.91,
-                    "action": "blur",
-                },
-                {"type": "gps", "source": "exif", "action": "remove"},
-            ],
-            details={"mock": True},
-        )
+        result_object_key = result_key(job_id, "jpg")
+        blurred = await asyncio.to_thread(blur_image, original)
+        await storage.put(result_object_key, blurred, "image/jpeg")
+        findings += [
+            {
+                "type": "address",
+                "source": "ocr",
+                "bbox": [40, 60, 320, 110],
+                "score": 0.91,
+                "action": "blur",
+            },
+            {"type": "gps", "source": "exif", "action": "remove"},
+        ]
 
-    masked, findings = mask_text(msg.text or "")
+    result_text = None
+    if msg.input_type in ("text", "image_text"):
+        result_text, text_findings = mask_text(msg.text or "")
+        findings += text_findings
+
     return ResultMessage(
         job_id=msg.job_id,
         status="DONE",
         risk_detected=bool(findings),
-        risk_before=0.7 if findings else 0.05,
-        risk_after=0.05,
+        risk_before=0.82 if findings else 0.05,
+        risk_after=0.12 if findings else 0.05,
         iterations=1 if findings else 0,
-        result_text=masked,
+        result_object_key=result_object_key,
+        result_text=result_text,
         findings=findings,
-        details={"mock": True},
+        details={"mock": True, "input_type": msg.input_type},
     )
 
 

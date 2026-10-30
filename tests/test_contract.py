@@ -29,3 +29,30 @@ def test_result_minimal_failed_message():
     msg = ResultMessage.model_validate({"job_id": str(uuid.uuid4()), "status": "FAILED"})
     assert msg.findings == []
     assert msg.error is None
+
+
+def test_job_message_image_text_carries_both_inputs():
+    """사진 + 글 작업은 object_key 와 text 를 한 메시지에 함께 담는다."""
+    from datetime import UTC, datetime
+
+    from app.schemas.contract import JobMessage
+
+    msg = JobMessage(
+        job_id=uuid.uuid4(),
+        input_type="image_text",
+        object_key="originals/x.jpg",
+        text="010-1234-5678",
+        created_at=datetime.now(UTC),
+    )
+    decoded = JobMessage.model_validate_json(msg.model_dump_json())
+    assert decoded.input_type == "image_text"
+    assert decoded.object_key == "originals/x.jpg"
+    assert decoded.text == "010-1234-5678"
+
+
+def test_input_type_of():
+    from app.api.jobs import input_type_of
+
+    assert input_type_of(has_image=True, has_text=False) == "image"
+    assert input_type_of(has_image=False, has_text=True) == "text"
+    assert input_type_of(has_image=True, has_text=True) == "image_text"
