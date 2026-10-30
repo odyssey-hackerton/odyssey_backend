@@ -35,7 +35,7 @@ main  ← 배포(시연) 브랜치. 직접 push 금지, PR로만 병합
 |---|---|---|
 | `feature/12-upload-api` | `feature/UploadAPI` | 대문자 |
 | `fix/sse-reconnect` | `fix/sse_reconnect` | 언더스코어 |
-| `hotfix/minio-timeout` | `feat/upload` | type은 `feature` |
+| `hotfix/s3-timeout` | `feat/upload` | type은 `feature` |
 | `release/v1.0.0` | `upload-api` | type 없음 |
 
 규칙에 맞지 않는 이름은 로컬에서 **브랜치를 만드는 순간 거부**되고(훅 설치 시), GitHub에서도 CI가 실패합니다.

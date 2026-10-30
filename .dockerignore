@@ -1,0 +1,15 @@
+.git
+.github
+.githooks
+.venv
+.env
+.env.*
+!.env.example
+__pycache__
+.pytest_cache
+.ruff_cache
+frontend
+nginx
+tests
+*.md
+create-issues.sh

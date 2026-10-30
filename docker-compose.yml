@@ -1,0 +1,86 @@
+# 서버 구성: Docker Hub 이미지만 받아 실행한다 (소스 불필요).
+# 서버에는 이 파일과 .env 두 개만 있으면 된다.
+#
+#   배포:  docker compose pull && docker compose up -d
+#   롤백:  .env 의 IMAGE_TAG 를 이전 태그로 바꾸고 위 명령 다시 실행
+#   로그:  docker compose logs -f api
+
+name: odyssey
+
+x-app: &app
+  image: ${DOCKERHUB_USER}/odyssey-api:${IMAGE_TAG:-latest}
+  env_file: .env
+  restart: unless-stopped
+  environment:
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+
+services:
+  web:
+    image: ${DOCKERHUB_USER}/odyssey-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: ["api"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    # GPU 서버 워커 접속용: REDIS_BIND = 이 서버의 사설 IP (0.0.0.0 금지)
+    ports:
+      - "${REDIS_BIND:-127.0.0.1}:6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # AI 워커가 준비되기 전까지 .env 의 COMPOSE_PROFILES=mock 으로 켠다.
+  mock-worker:
+    <<: *app
+    profiles: ["mock"]
+    command: ["mock-worker"]
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
