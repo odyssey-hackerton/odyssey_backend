@@ -6,17 +6,32 @@
 - **PostgreSQL**: 작업·결과 메타데이터
 - **Redis**: 작업 큐(`jobs`), 결과 큐(`results`), 진행 상태(`job:{id}`)
 - **AWS S3**: 원본·결과 이미지
-- **Nginx**: 정적 프론트, `/api` 리버스 프록시
+- **React 프론트** (`frontend/`): 사진·글 업로드, 진행 단계 표시, 처리 전후 비교
+- **Nginx**: 프론트 서빙, `/api` 리버스 프록시
 - **Mock 워커**: 실제 AI 워커 없이 전체 흐름을 개발·시연하기 위한 가짜 워커
 
 AI 워커와 주고받는 메시지 형식은 [`app/schemas/contract.py`](app/schemas/contract.py)에 있습니다.
 
 ## 로컬 개발
 
+백엔드:
+
 ```bash
 uv sync
 uv run ruff check . && uv run ruff format --check . && uv run pytest
 ```
+
+프론트 (Node.js 20 이상). 화면만 고칠 때는 서버의 API에 붙여서 개발하면 됩니다.
+
+```bash
+cd frontend
+npm install
+VITE_API_TARGET=http://10.1.1.27 npm run dev   # 서버 API 사용 (VPN 연결 필요), http://localhost:5173
+npm run dev                                     # 로컬 백엔드(localhost:8000) 사용
+npm run build                                   # 타입 검사 + 빌드 확인
+```
+
+`/api` 요청은 개발 서버가 백엔드로 넘겨 주므로 CORS 설정이 필요 없습니다. 배포 때는 `odyssey-web` 이미지를 빌드하면서 React도 함께 빌드됩니다.
 
 서버와 같은 구성으로 띄워 보려면 이미지를 빌드·푸시한 뒤(아래 2번) 로컬에서도 `.env`를 채우고 `docker compose up -d`를 실행하면 됩니다. `COMPOSE_PROFILES=mock`이면 AI 워커 대신 Mock 워커가 돕니다. 전체 흐름(업로드 → 진행 이벤트 → 결과 이미지 → 리포트) 확인:
 
@@ -162,7 +177,7 @@ app/
 migrations/     Alembic (API 컨테이너가 시작할 때 자동 적용)
 mock_worker/    개발용 가짜 AI 워커
 nginx/          Nginx 설정, odyssey-web 이미지 Dockerfile
-frontend/       정적 프론트 (빌드 결과물로 교체)
+frontend/       React(Vite) 프론트. odyssey-web 이미지 빌드 때 함께 빌드
 scripts/        이미지 빌드·푸시, 스모크 테스트
 ```
 
