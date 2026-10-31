@@ -6,12 +6,14 @@ export default function ResultView({
   photos,
   text,
   demo,
+  notice,
   onRestart,
   onBack,
 }: {
   photos: Photo[];
   text: string;
   demo: boolean;
+  notice?: string;
   onRestart: () => void;
   onBack: () => void;
 }) {
@@ -66,6 +68,12 @@ export default function ResultView({
           ? "예시 편집 결과입니다. 실제 개인정보 보호 결과가 아니에요."
           : "결과를 한 번 더 살펴보고, 원하는 곳에 공유하세요."}
       </p>
+      {notice && (
+        <div className="alert warning" role="note">
+          <Icon name="info" />
+          <span>{notice}</span>
+        </div>
+      )}
       {photos[index] && (
         <img
           className="share-photo"
@@ -126,7 +134,7 @@ export default function ResultView({
       <div className="share-bottom">
         <button className="text-button" onClick={onBack}>
           <Icon name="back" size={16} />
-          재검증 결과
+          {notice ? "분석 결과" : "재검증 결과"}
         </button>
         <button className="text-button" onClick={onRestart}>
           새 게시물 보호하기

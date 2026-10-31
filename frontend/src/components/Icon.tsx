@@ -21,6 +21,7 @@ const paths = {
   lock: "M6 10h12v11H6zM8 10V6a4 4 0 0 1 8 0v4m-4 5v2",
   spark: "m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3 3-7Z",
   back: "M20 12H4m6-6-6 6 6 6",
+  undo: "M9 14 4 9l5-5M4 9h11a5 5 0 0 1 0 10h-4",
   chevron: "m9 5 7 7-7 7",
 } as const;
 

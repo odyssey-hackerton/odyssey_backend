@@ -1,18 +1,32 @@
-import type { Clue, Photo } from "../media";
+import type { Clue } from "../flow";
+import type { Photo } from "../media";
 import { validBox } from "../media";
 
+const COLORS = { high: "#f26478", medium: "#efa310", low: "#1688ff" } as const;
+export const clueColor = (clue: Clue) => COLORS[clue.risk ?? "low"];
+
+/**
+ * 사진 위에 단서 영역을 그린다. src 를 주면 그 이미지(편집 미리보기)를 배경으로 쓴다.
+ * 좌표는 언제나 원본 사진 픽셀 기준이다.
+ */
 export default function PhotoView({
   photo,
+  src,
   clues = [],
-  selected = -1,
+  labelOf,
+  selected,
   onSelect,
+  showBoxes = true,
 }: {
   photo: Photo;
+  src?: string;
   clues?: Clue[];
-  selected?: number;
+  labelOf: (clue: Clue) => string;
+  selected?: string;
   onSelect?: (clue: Clue) => void;
+  showBoxes?: boolean;
 }) {
-  const dot = photo.width / 32;
+  const dot = Math.max(photo.width, photo.height) / 30;
   return (
     <svg
       className="photo-view"
@@ -20,65 +34,64 @@ export default function PhotoView({
       role="group"
       aria-label="사진과 발견된 단서"
     >
-      <image href={photo.url} width={photo.width} height={photo.height} />
-      {clues.map((clue) => {
-        const box = validBox(clue.bbox, photo.width, photo.height);
-        if (!box) return null;
-        const [x, y, x2, y2] = box;
-        const color =
-          clue.risk === "high"
-            ? "#f26478"
-            : clue.idx === 2
-              ? "#efa310"
-              : "#1688ff";
-        return (
-          <g
-            key={clue.idx}
-            role="button"
-            tabIndex={0}
-            aria-label={`${clue.idx + 1}. ${clue.title}`}
-            aria-pressed={selected === clue.idx}
-            onClick={() => onSelect?.(clue)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onSelect?.(clue);
-              }
-            }}
-            style={{ cursor: "pointer" }}
-          >
-            <rect
-              x={x}
-              y={y}
-              width={x2 - x}
-              height={y2 - y}
-              fill={color}
-              fillOpacity={selected === clue.idx ? 0.25 : 0.1}
-              stroke={color}
-              strokeWidth={photo.width / 230}
-            />
-            <circle
-              cx={x}
-              cy={y}
-              r={dot / 2}
-              fill={color}
-              stroke="white"
-              strokeWidth={photo.width / 450}
-            />
-            <text
-              x={x}
-              y={y}
-              fill="white"
-              textAnchor="middle"
-              dominantBaseline="central"
-              fontSize={dot * 0.58}
-              fontWeight="700"
+      <image href={src ?? photo.url} width={photo.width} height={photo.height} />
+      {showBoxes &&
+        clues.map((clue) => {
+          const box = validBox(clue.bbox, photo.width, photo.height);
+          if (!box) return null;
+          const [x, y, x2, y2] = box;
+          const color = clueColor(clue);
+          const active = selected === clue.key;
+          const label = labelOf(clue);
+          return (
+            <g
+              key={clue.key}
+              role="button"
+              tabIndex={0}
+              aria-label={`${label}. ${clue.title}`}
+              aria-pressed={active}
+              onClick={() => onSelect?.(clue)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect?.(clue);
+                }
+              }}
+              style={{ cursor: onSelect ? "pointer" : "default" }}
             >
-              {clue.idx + 1}
-            </text>
-          </g>
-        );
-      })}
+              <rect
+                x={x}
+                y={y}
+                width={x2 - x}
+                height={y2 - y}
+                fill={color}
+                fillOpacity={active ? 0.22 : 0.06}
+                stroke={color}
+                strokeWidth={dot / (active ? 6 : 9)}
+                rx={dot / 8}
+              />
+              <circle
+                cx={x}
+                cy={y}
+                r={dot / 2}
+                fill={color}
+                stroke="white"
+                strokeWidth={dot / 14}
+              />
+              <text
+                x={x}
+                y={y}
+                fill="white"
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize={dot * 0.55}
+                fontWeight="700"
+              >
+                {label}
+              </text>
+            </g>
+          );
+        })}
     </svg>
   );
 }
