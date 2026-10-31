@@ -161,10 +161,26 @@ test("image regeneration uses the first AI-protected photo, not the user's edits
     { ...base, key: "1:0", position: 1, imageIndex: 1, recommended: "mask" as const, action: "mask" as const,
       bbox: [0, 0, 5, 5] as [number, number, number, number] },
   ];
-  const sent = generationBase(clues, 0, "0:2");
+  const sent = generationBase(clues, 0, ["0:2"]);
   assert.deepEqual(sent.map((c) => c.key), ["0:0", "0:1", "0:2"], "only this photo, deleted regions restored");
   assert.deepEqual(sent.map((c) => c.action), ["mask", "blur", "mask"], "recommended actions; the target stays covered");
   assert.deepEqual(sent[0].bbox, [10, 10, 50, 50], "resized box goes back to the AI box");
   assert.ok(sent.every((c) => !c.deleted && !c.generatedUrl && !c.maskBox));
   assert.equal(clues[0].action, "blur", "the editor state itself is untouched");
+});
+
+test("image regeneration covers every region of the photo at once, except deleted or kept ones", async () => {
+  const { generationTargets } = await import("../src/flow.ts");
+  const base = { position: 0, idx: 0, imageIndex: 0, kind: "image" as const, type: "x", title: "x", description: "x",
+    recommended: "mask" as const, bbox: [0, 0, 10, 10] as [number, number, number, number] };
+  const clues = [
+    { ...base, key: "0:0", category: "text" as const, action: "mask" as const },
+    { ...base, key: "0:1", idx: 1, category: "object" as const, action: "blur" as const },
+    { ...base, key: "0:2", idx: 2, category: "location" as const, action: "regenerate" as const, generatedUrl: "blob:x" },
+    { ...base, key: "0:3", idx: 3, action: "skip" as const },
+    { ...base, key: "0:4", idx: 4, action: "mask" as const, deleted: true },
+    { ...base, key: "1:0", position: 1, imageIndex: 1, action: "mask" as const },
+    { ...base, key: "t", kind: "text" as const, imageIndex: null, action: "mask" as const },
+  ];
+  assert.deepEqual(generationTargets(clues, 0).map((c) => c.key), ["0:0", "0:1", "0:2"]);
 });

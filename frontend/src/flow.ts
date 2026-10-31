@@ -54,18 +54,25 @@ export interface Clue {
   generatedUrl?: string;
 }
 
+/** 이미지 재생성으로 한 번에 새로 그릴 영역: 이 사진에서 지우지 않았고 "그대로 두기"가 아닌 영역. */
+export function generationTargets(clues: Clue[], imageIndex: number): Clue[] {
+  return clues.filter((c) => c.kind === "image" && c.imageIndex === imageIndex && !c.deleted
+    && c.action !== "skip" && !!c.bbox);
+}
+
 /**
- * 이미지 재생성(Gemini)에 보낼 사진의 영역 목록.
+ * 이미지 재생성(AI)에 보낼 사진의 영역 목록.
  * 사용자가 바꾼 편집(보호 방법, 영역 크기, 삭제, 부분마스킹, 이전 생성 결과)은 넣지 않고
- * AI가 처음 추천한 보호 상태로 되돌려 그린다. 생성할 영역(targetKey)은 가린 채로 보낸다.
+ * AI가 처음 추천한 보호 상태로 되돌려 그린다. 생성할 영역(targetKeys)은 가린 채로 보낸다.
  */
-export function generationBase(clues: Clue[], imageIndex: number, targetKey: string): Clue[] {
+export function generationBase(clues: Clue[], imageIndex: number, targetKeys: string[]): Clue[] {
+  const targets = new Set(targetKeys);
   return clues
     .filter((c) => c.kind === "image" && c.imageIndex === imageIndex)
     .map((c) => ({
       ...c,
       bbox: c.originalBox ?? c.bbox,
-      action: c.key === targetKey || c.recommended === "regenerate" || c.recommended === "partialMask"
+      action: targets.has(c.key) || c.recommended === "regenerate" || c.recommended === "partialMask"
         ? "mask"
         : c.recommended,
       deleted: false,
