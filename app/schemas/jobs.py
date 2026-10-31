@@ -83,7 +83,7 @@ class JobResultOut(BaseModel):
             "저장하지 말고 필요할 때마다 이 API를 다시 호출한다."
         ),
         examples=[
-            "https://odyssey-images.s3.ap-northeast-2.amazonaws.com/results/3f2b….jpg?X-Amz-…"
+            "https://odyssey-hackarton-images.s3.ap-northeast-2.amazonaws.com/results/3f2b….jpg?X-Amz-…"
         ],
     )
     expires_in: int | None = Field(
