@@ -422,7 +422,10 @@ async def transform_post(
     "/{post_id}/result",
     response_model=PostResultOut,
     summary="보호된 게시물 조회",
-    responses={**NOT_FOUND, 409: _err("아직 끝나지 않은 게시물", "post is VERIFYING")},
+    responses={
+        404: _err("게시물이 없거나 처리 결과가 누락됨", "post result not found"),
+        409: _err("아직 끝나지 않은 게시물", "post is VERIFYING"),
+    },
 )
 async def get_post_result(post_id: PostIdPath, session: SessionDep) -> PostResultOut:
     """모든 항목이 `DONE`이면 결과 사진 주소와 처리된 글을 돌려준다.
@@ -434,6 +437,11 @@ async def get_post_result(post_id: PostIdPath, session: SessionDep) -> PostResul
     current = aggregate_status([j.status for j in post.jobs])
     if current != JobStatus.DONE:
         raise HTTPException(status.HTTP_409_CONFLICT, f"post is {current}")
+    if any(
+        j.result is None or (j.input_type in ("image", "image_text") and not j.result_object_key)
+        for j in post.jobs
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "post result not found")
     text_job = next((j for j in post.jobs if j.input_type in ("text", "image_text")), None)
     return PostResultOut(
         post_id=post.id,

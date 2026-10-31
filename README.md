@@ -320,6 +320,15 @@ docker compose --env-file .env --env-file litellm/.env stop litellm litellm-db
 | `GET` | `/api/posts/{id}/result` | 처리된 글과 항목별 결과 사진 주소(`/api/jobs/{job_id}/image`) |
 | `GET` | `/api/jobs/{id}/image` | 결과 사진을 서버를 거쳐 내려줌. 같은 주소라 S3 CORS 설정 없이 공유·다운로드 가능 |
 
+공유는 `x-api-test`에서 확인한 Web Share 방식입니다. 모든 항목이 `DONE`이면 프론트가
+`/api/posts/{id}/result`의 처리된 본문과 사진 파일을 미리 준비하고, 버튼 클릭 시
+`navigator.share({ files, text })`로 전달합니다. 사용자가 공유 시트에서 X를 고르고 글쓰기
+화면에서 최종 게시합니다. X API 키나 OAuth 설정은 필요 없습니다.
+
+결과가 누락되면 `/result`는 `404`로 응답해 일부 사진만 공유되는 것을 막습니다.
+사진 다운로드는 S3 파일이 없으면 `404`, 저장소 연결·권한 오류면 `503`입니다.
+실제 기기 확인 절차는 [프론트 README](frontend/README.md)를 참고하세요.
+
 사진 1장 단위로 쓰는 작업 API도 그대로 있습니다.
 
 | 메서드 | 경로 | 설명 |

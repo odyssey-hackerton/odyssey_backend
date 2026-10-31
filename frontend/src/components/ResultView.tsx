@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Photo } from "../media";
+import { sharePhotos, type Photo } from "../media";
 import Icon from "./Icon";
 
 export default function ResultView({
@@ -20,19 +20,9 @@ export default function ResultView({
   const [sharing, setSharing] = useState(false);
   const files = photos.map((p) => p.file);
   async function share() {
-    const data: ShareData = {
-      ...(text ? { text } : {}),
-      ...(files.length ? { files } : {}),
-    };
-    if (!navigator.share || (navigator.canShare && !navigator.canShare(data))) {
-      setMessage(
-        "이 환경에서는 파일 공유를 지원하지 않아요. 사진을 다운로드하고 본문을 복사하거나, HTTPS로 연결한 iPhone Safari에서 시도해 주세요.",
-      );
-      return;
-    }
     setSharing(true);
     try {
-      await navigator.share(data);
+      await sharePhotos(files, text);
       setMessage(
         "공유 대상에 전달했어요. X 글쓰기 화면에서 사진과 본문을 확인해 주세요.",
       );
@@ -40,7 +30,9 @@ export default function ResultView({
       setMessage(
         e instanceof DOMException && e.name === "AbortError"
           ? "공유를 취소했어요. 결과는 그대로 남아 있어요."
-          : "공유하지 못했어요. 다운로드 후 다시 시도해 주세요.",
+          : e instanceof Error && !(e instanceof DOMException)
+            ? e.message
+            : "공유하지 못했어요. 다운로드 후 다시 시도해 주세요.",
       );
     } finally {
       setSharing(false);
