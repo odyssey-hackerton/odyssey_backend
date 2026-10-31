@@ -66,23 +66,31 @@ test("waiting stops at awaiting_user so the user can choose", async () => {
   }
 });
 
-test("background generation sends edited pixels and geometry, and surfaces provider errors", async () => {
-  const { regenerateBackground, getGenerationStatus } = await import("../src/api.ts");
+test("background generation sends every region in one call and splits the patches back in order", async () => {
+  const { regenerateBackgrounds, getGenerationStatus } = await import("../src/api.ts");
   const original = globalThis.fetch;
   let requests = 0;
+  let fail = true;
   globalThis.fetch = async (path, init) => {
     requests++;
     assert.equal(path, "/api/images/regenerate");
     if (!init) return Response.json({ enabled: true });
     const form = init.body as FormData;
     assert.equal(await (form.get("file") as File).text(), "edited pixels");
-    assert.deepEqual(JSON.parse(form.get("bbox") as string), [10, 20, 30, 40]);
-    return Response.json({ detail: "배경을 생성하지 못했어요." }, { status: 502 });
+    assert.deepEqual(JSON.parse(form.get("boxes") as string), [[10, 20, 30, 40], [50, 60, 70, 80]]);
+    assert.equal(form.get("bbox"), null);
+    if (fail) return Response.json({ detail: "배경을 생성하지 못했어요." }, { status: 502 });
+    return Response.json({ patches: [btoa("first"), btoa("second")] });
   };
   try {
-    await assert.rejects(regenerateBackground(new Blob(["edited pixels"]), [10, 20, 30, 40]), /생성하지 못/);
+    const boxes: [number, number, number, number][] = [[10, 20, 30, 40], [50, 60, 70, 80]];
+    await assert.rejects(regenerateBackgrounds(new Blob(["edited pixels"]), boxes), /생성하지 못/);
+    fail = false;
+    const blobs = await regenerateBackgrounds(new Blob(["edited pixels"]), boxes);
+    assert.deepEqual(await Promise.all(blobs.map((b) => b.text())), ["first", "second"]);
+    assert.ok(blobs.every((b) => b.type === "image/png"));
     assert.deepEqual(await getGenerationStatus(), { enabled: true });
-    assert.equal(requests, 2);
+    assert.equal(requests, 3);
   } finally { globalThis.fetch = original; }
 });
 

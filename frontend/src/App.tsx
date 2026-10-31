@@ -341,7 +341,7 @@ export default function App() {
         </nav>
         {demo && step > 0 && (
           <p className="editor-warning" role="status">
-            화면 데모 · 샘플 영역으로 편집을 체험해요. 실제 AI 탐지·재검증·Gemini 생성은 실행하지 않아요.
+            화면 데모 · 샘플 영역으로 편집을 체험해요. 실제 AI 탐지·재검증·이미지 생성은 실행하지 않아요.
           </p>
         )}
         {error && (
@@ -411,7 +411,7 @@ export default function App() {
                 }))}
                 onChange={changeRegion}
                 onGenerated={generatedRegion}
-                onBusy={(value) => setBusy(value ? "Gemini가 배경을 생성하고 있어요" : "")}
+                onBusy={(value) => setBusy(value ? "AI가 배경을 생성하고 있어요" : "")}
                 onReset={resetPhoto}
                 onApply={requestApply}
                 onZoom={setZoom}

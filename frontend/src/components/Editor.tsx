@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ACTION_LABEL, ALLOWED_ACTIONS, CATEGORY_LABEL, regionLetters, type Clue, type EditAction } from "../flow";
+import { ACTION_LABEL, ALLOWED_ACTIONS, CATEGORY_LABEL, generationBase, generationTargets, regionLetters, type Clue, type EditAction } from "../flow";
 import { renderPhoto, type Photo } from "../media";
 import { Filmstrip } from "./Analysis";
 import Icon, { type IconName } from "./Icon";
@@ -43,6 +43,7 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
   const letters = regionLetters(clues, photoIndex);
   const regionKey = JSON.stringify(regions);
   const fileClues = clues.filter((c) => c.kind === "file" && c.imageIndex === photoIndex);
+  const targets = generationTargets(clues, photoIndex);
   const pendingMask = clues.some((c) => !c.deleted && c.action === "partialMask" && !c.maskBox);
 
   useEffect(() => {
@@ -111,6 +112,19 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
               onClick={() => preview && onZoom(preview)}><Icon name="search" /></button>
           </> : <p className="text-preview">사진 없이 글만 올렸어요. 글은 적용할 때 확인해요.</p>}
         </div>
+        {photo && targets.length > 0 && (
+          <ImageRegeneration key={photoIndex} demo={demo}
+            labels={targets.map((c) => letters.get(c.key) ?? "")}
+            boxes={targets.map((c) => c.bbox!)} attempts={attempts}
+            disabled={busy || rendering || pendingMask || !!error}
+            prepareImage={() => renderPhoto(photo, generationBase(clues, photoIndex, targets.map((c) => c.key)))}
+            onAttempt={() => onGenerationAttempt(photoIndex)}
+            onGenerated={(blobs) => {
+              targets.forEach((c, i) => onGenerated(c.key, blobs[i]));
+              setConfirmed((all) => all.map((v, i) => i === photoIndex ? false : v));
+            }}
+            onBusy={onBusy} />
+        )}
         {photos.length > 1 && <Filmstrip photos={photos} index={photoIndex} done={confirmed} onSelect={openPhoto} />}
       </section>
 
@@ -143,7 +157,7 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
             {chosen.title} · 어떻게 보호할까요?
           </label>
           <div className="edit-actions">
-            {ALLOWED_ACTIONS[chosen.category ?? "object"].map((id) => (
+            {[...ALLOWED_ACTIONS[chosen.category ?? "object"], ...(chosen.generatedUrl ? ["regenerate" as const] : [])].map((id) => (
               <button key={id} aria-pressed={chosen.action === id}
                 onClick={() => change(chosen.key, { action: id })}>
                 <Icon name={TOOL_ICONS[id]} size={22} /><span>{ACTION_LABEL[id]}</span>
@@ -162,20 +176,6 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
             이 영역은 그대로 두기
           </label>
         </div>}
-
-        {photo && chosen?.category === "location" && chosen.bbox && (
-          <ImageRegeneration key={`${photoIndex}:${chosen.key}`} demo={demo}
-            bbox={chosen.bbox} attempts={attempts} disabled={busy || rendering || pendingMask || !!error}
-            prepareImage={() => renderPhoto(photo, regions.map((c) =>
-              c.key === chosen.key || (c.action === "regenerate" && !c.generatedUrl)
-                ? { ...c, action: "mask" } : c))}
-            onAttempt={() => onGenerationAttempt(photoIndex)}
-            onGenerated={(blob) => {
-              onGenerated(chosen.key, blob);
-              setConfirmed((all) => all.map((v, i) => i === photoIndex ? false : v));
-            }}
-            onBusy={onBusy} />
-        )}
 
         {(fileClues.length > 0 || textClueCount > 0) && <ul className="auto-notes">
           {fileClues.length > 0 && <li><Icon name="check" size={15} />사진 파일 정보(촬영 위치·기기)는 적용할 때 자동으로 지워요.</li>}
