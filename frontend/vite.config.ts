@@ -12,6 +12,8 @@ const proxy = {
 
 export default defineConfig({
   plugins: [react()],
+  // 첫 텍스트제거 선택 때 의존성 최적화로 페이지가 새로고침되지 않게 한다.
+  optimizeDeps: { include: ["@techstark/opencv-js"] },
   server: { port: 5173, proxy },
   preview: { port: 4173, proxy },
 });

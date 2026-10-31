@@ -57,15 +57,36 @@ export function validBox(
   return box[2] > box[0] && box[3] > box[1] ? box : null;
 }
 
-/** 워커의 단색 가림 색 (stages/transform.py 의 (20, 33, 56)) */
 const MASK_COLOR = "rgb(20, 33, 56)";
 
-/**
- * 선택한 처리 방법을 브라우저에서 그려 미리보기를 만든다. 워커 결과와 같은 모양이 되게 한다.
- * - blur(가리기): 영역을 작게 줄였다 키워 흐리게 (ctx.filter 가 없는 Safari 구버전도 동작)
- * - mask / remove(지우기): 워커와 같은 단색. 자연스러운 지우기는 인페인팅 연결 후 바뀐다.
- * 결과는 PNG 로 다시 그려 사진 파일 정보(EXIF)가 남지 않는다.
- */
+/** Two sliding-window passes, including browsers without Canvas filter support. */
+export function blurPixels(data: Uint8ClampedArray, width: number, height: number, radius: number) {
+  const temp = new Uint8ClampedArray(data.length);
+  const r = Math.max(1, Math.round(radius));
+  for (const horizontal of [true, false]) {
+    const source = horizontal ? data : temp, target = horizontal ? temp : data;
+    const length = horizontal ? width : height, lines = horizontal ? height : width;
+    for (let line = 0; line < lines; line++) {
+      const index = (n: number) => (horizontal ? line * width + n : n * width + line) * 4;
+      const sums = [0, 0, 0, 0];
+      for (let k = -r; k <= r; k++) {
+        const i = index(Math.max(0, Math.min(length - 1, k)));
+        for (let c = 0; c < 4; c++) sums[c] += source[i + c];
+      }
+      for (let n = 0; n < length; n++) {
+        const i = index(n);
+        const old = index(Math.max(0, n - r));
+        const next = index(Math.min(length - 1, n + r + 1));
+        for (let c = 0; c < 4; c++) {
+          target[i + c] = sums[c] / (2 * r + 1);
+          sums[c] += source[next + c] - source[old + c];
+        }
+      }
+    }
+  }
+}
+
+/** Preview and export use the same pixels; PNG export removes EXIF. */
 export async function renderPhoto(photo: Photo, clues: Clue[]): Promise<Blob> {
   const img = await imageElement(photo.url);
   const canvas = document.createElement("canvas");
@@ -73,31 +94,56 @@ export async function renderPhoto(photo: Photo, clues: Clue[]): Promise<Blob> {
   canvas.height = photo.height;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("이 브라우저에서 이미지 편집을 사용할 수 없어요.");
-  ctx.drawImage(img, 0, 0);
-  for (const clue of clues) {
-    if (clue.kind !== "image" || clue.action === "skip") continue;
-    const box = validBox(clue.bbox, photo.width, photo.height);
+  ctx.fillStyle = "white";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, photo.width, photo.height);
+  // Reconstructed pixels go first so they cannot overwrite opaque protections.
+  const restorative = (c: Clue) => ["remove", "regenerate"].includes(c.action);
+  const ordered = [...clues].sort((a, b) => Number(restorative(b)) - Number(restorative(a)));
+  for (const clue of ordered) {
+    if (clue.kind !== "image" || clue.deleted || clue.action === "skip") continue;
+    let box = validBox(clue.bbox, photo.width, photo.height);
     if (!box) continue;
-    const [x, y] = [Math.floor(box[0]), Math.floor(box[1])];
-    const w = Math.ceil(box[2]) - x;
-    const h = Math.ceil(box[3]) - y;
-    if (clue.action === "blur") {
-      const scale = Math.max(4, Math.min(w, h) / 6);
+    if (clue.action === "partialMask") {
+      const part = validBox(clue.maskBox, 1, 1);
+      if (!part) throw new Error("부분마스킹할 범위를 사진에서 지정해 주세요.");
+      const [x, y, x2, y2] = box;
+      box = [x + (x2 - x) * part[0], y + (y2 - y) * part[1],
+        x + (x2 - x) * part[2], y + (y2 - y) * part[3]];
+    }
+    const x = Math.floor(box[0]), y = Math.floor(box[1]);
+    const w = Math.ceil(box[2]) - x, h = Math.ceil(box[3]) - y;
+    const strength = 16;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    if (clue.action === "regenerate") {
+      if (!clue.generatedUrl) throw new Error("이미지를 먼저 생성하거나 다른 편집 방식을 선택해 주세요.");
+      ctx.drawImage(await imageElement(clue.generatedUrl), x, y, w, h);
+    } else if (clue.action === "remove") {
+      const { inpaintRegion } = await import("./inpaint");
+      await inpaintRegion(ctx, x, y, w, h);
+    } else if (clue.action === "blur" || clue.action === "mosaic") {
       const small = document.createElement("canvas");
-      small.width = Math.max(1, Math.round(w / scale));
-      small.height = Math.max(1, Math.round(h / scale));
-      const sctx = small.getContext("2d")!;
-      sctx.imageSmoothingEnabled = true;
+      const scale = clue.action === "mosaic" ? strength : Math.max(1, Math.max(w, h) / 768);
+      small.width = Math.max(1, Math.ceil(w / scale));
+      small.height = Math.max(1, Math.ceil(h / scale));
+      const sctx = small.getContext("2d");
+      if (!sctx) throw new Error("이미지 편집을 사용할 수 없어요.");
       sctx.drawImage(canvas, x, y, w, h, 0, 0, small.width, small.height);
-      ctx.save();
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
+      if (clue.action === "blur") {
+        const pixels = sctx.getImageData(0, 0, small.width, small.height);
+        blurPixels(pixels.data, small.width, small.height, strength / scale);
+        sctx.putImageData(pixels, 0, 0);
+      }
+      ctx.imageSmoothingEnabled = clue.action !== "mosaic";
       ctx.drawImage(small, 0, 0, small.width, small.height, x, y, w, h);
-      ctx.restore();
     } else {
       ctx.fillStyle = MASK_COLOR;
       ctx.fillRect(x, y, w, h);
     }
+    ctx.restore();
   }
   return new Promise<Blob>((resolve, reject) =>
     canvas.toBlob(

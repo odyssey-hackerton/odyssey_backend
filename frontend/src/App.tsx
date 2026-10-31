@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createPost,
-  fetchImage,
   getPostReport,
-  getPostResult,
-  transformPost,
   waitForPost,
   type JobStatus,
 } from "./api";
-import { choicesFor, cluesFromReport, type Clue, type EditAction } from "./flow";
+import { cluesFromFindings, cluesFromReport, maskText, type Clue } from "./flow";
 import { photoFromBlob, readPhoto, renderPhoto, validateFiles, type Photo } from "./media";
 import Analysis from "./components/Analysis";
 import Editor from "./components/Editor";
@@ -21,7 +18,7 @@ import Verify from "./components/Verify";
 
 // 서버 게시물 API(/api/posts)로 동작한다.
 // 03: 게시물 등록 → AI ① 탐지 + ② 위험 분석 → 사용자 선택 대기
-// 04: 미리보기는 브라우저에서 그리고, 적용하면 서버로 ③ 변환 + ② 재검증
+// 04: 브라우저에서 편집한 최종 픽셀을 새 게시물 분석으로 재검증한다.
 // 06의 건너뛰기(03에서)는 서버를 거치지 않고 사진 파일 정보만 지운다.
 
 const STEPS = ["홈", "업로드", "분석 결과", "보호 편집", "재검증", "공유"];
@@ -50,15 +47,19 @@ const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortEr
 
 export default function App() {
   const [step, setStep] = useState(0);
+  const [demo, setDemo] = useState(false);
   const [furthest, setFurthest] = useState(1);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [text, setText] = useState("");
+  // shortcut: counts reset on reload; persist only if editing must survive reloads.
+  const [generationAttempts, setGenerationAttempts] = useState<Record<number, number>>({});
   const [postId, setPostId] = useState<string | null>(null);
   const [clues, setClues] = useState<Clue[]>([]);
   const [reviewing, setReviewing] = useState(false);
   const [applyText, setApplyText] = useState(true);
   const [outputs, setOutputs] = useState<Photo[]>([]);
   const [outputText, setOutputText] = useState("");
+  const [initialRisk, setInitialRisk] = useState<number | null>(null);
   const [verification, setVerification] = useState<Verification | null>(null);
   const [skippedEdit, setSkippedEdit] = useState(false);
   const [busy, setBusy] = useState("");
@@ -94,6 +95,8 @@ export default function App() {
   function invalidate() {
     running.current?.abort();
     setPostId(null);
+    setDemo(false);
+    setGenerationAttempts({});
     setClues([]);
     setOutputs([]);
     setOutputText("");
@@ -168,6 +171,7 @@ export default function App() {
       commit?.();
       setPostId(post_id);
       setClues(cluesFromReport(report));
+      setInitialRisk(report.risk_before);
       go(next);
     });
   }
@@ -184,16 +188,24 @@ export default function App() {
   }
 
   // ---- 04 편집 ----
-  function changeAction(key: string, action: EditAction) {
-    setClues((all) => all.map((c) => (c.key === key ? { ...c, action } : c)));
+  function changeRegion(key: string, patch: Partial<Clue>) {
+    setClues((all) => all.map((c) => c.key === key ? { ...c, ...patch } : c));
     setFurthest(3);
   }
   function resetPhoto(imageIndex: number) {
-    setClues((all) =>
-      all.map((c) => (c.imageIndex === imageIndex ? { ...c, action: c.recommended } : c)),
-    );
+    setClues((all) => all.map((c) => c.imageIndex === imageIndex ? {
+      ...c, bbox: c.originalBox ?? c.bbox, action: c.recommended,
+      deleted: false, maskBox: undefined, generatedUrl: undefined,
+    } : c));
+    setFurthest(3);
+  }
+  function generatedRegion(key: string, blob: Blob) {
+    const generatedUrl = URL.createObjectURL(blob);
+    objectUrls.current.add(generatedUrl);
+    changeRegion(key, { generatedUrl, action: "regenerate" });
   }
   function requestApply() {
+    if (busy) return;
     if (clues.some((c) => c.kind === "text")) setReviewing(true);
     else void apply(false);
   }
@@ -203,29 +215,33 @@ export default function App() {
     setReviewing(false);
     setApplyText(useMaskedText);
     setSkippedEdit(false);
+    if (demo) {
+      await run("샘플 편집 결과를 준비하고 있어요", async () => {
+        setOutputs(await renderAll(photos, clues));
+        setOutputText(text);
+        go(5);
+      });
+      return;
+    }
     if (!postId) return;
     await run("보호를 적용하고 AI가 다시 확인하고 있어요", async (signal) => {
-      await transformPost(
-        postId,
-        choicesFor(clues, useMaskedText),
-        photos.map((p) => p.file),
-      );
-      await settle(postId, signal);
-      const [result, report] = await Promise.all([getPostResult(postId), getPostReport(postId)]);
-      const files = await Promise.all(
-        result.items
-          .filter((i) => i.image_url)
-          .map((i) => fetchImage(i.image_url!, `odyssey-${i.position + 1}`)),
-      );
-      const loaded = (await Promise.all(files.map(readPhoto))).map(track);
+      const loaded = await renderAll(photos, clues);
+      const caption = useMaskedText ? maskText(text.trim(), clues) : text.trim();
+      const issue = validateFiles(loaded.map((p) => p.file), 0);
+      if (issue) throw new Error(`편집 결과: ${issue}`);
+      let remaining: Clue[] = [];
+      let after: number | null = null;
+      if (loaded.length || caption) {
+        const { post_id } = await createPost(loaded.map((p) => p.file), caption);
+        await settle(post_id, signal);
+        const report = await getPostReport(post_id);
+        remaining = cluesFromReport(report).filter((c) => c.kind !== "file");
+        after = report.risk_before;
+      }
       if (signal.aborted) return;
       setOutputs(loaded);
-      setOutputText(result.text ?? "");
-      setVerification({
-        before: report.risk_before,
-        after: report.risk_after,
-        remaining: cluesFromReport(report).filter((c) => c.kind !== "file"),
-      });
+      setOutputText(caption);
+      setVerification({ before: initialRisk, after, remaining });
       go(4);
     });
   }
@@ -265,10 +281,21 @@ export default function App() {
       const response = await fetch("/cafe.jpg");
       if (!response.ok) throw new Error("예시 사진을 불러오지 못했어요.");
       const file = new File([await response.blob()], "cafe-example.jpg", { type: "image/jpeg" });
+      const photo = track(await readPhoto(file));
+      const { width: w, height: h } = photo;
       invalidate();
-      setPhotos([track(await readPhoto(file))]);
-      setText("좋은 날, 카페에서 ☕ 예약 문의는 010-1234-5678");
-      go(1);
+      setDemo(true);
+      setPhotos([photo]);
+      setText("좋은 날, 카페에서 ☕");
+      setClues(cluesFromFindings([
+        { type: "store", category: "text", title: "카페 간판", description: "텍스트 편집을 체험하는 샘플 영역이에요.",
+          bbox: [w * .23, h * .365, w * .51, h * .405], action: "mask" },
+        { type: "object", category: "object", title: "자전거", description: "객체 편집을 체험하는 샘플 영역이에요.",
+          bbox: [w * .78, h * .58, w * .94, h * .65], action: "mosaic" },
+        { type: "architecture", category: "location", title: "건물 외관", description: "간접 위치 단서 편집을 체험하는 샘플 영역이에요.",
+          bbox: [w * .81, h * .16, w * .99, h * .43], action: "mask" },
+      ], 0, 0));
+      go(3);
     } catch (e) {
       setError(messageOf(e));
     }
@@ -299,7 +326,7 @@ export default function App() {
           {STEPS.map((label, index) => (
             <button
               key={label}
-              disabled={index > furthest || !!busy}
+              disabled={index > furthest || !!busy || (demo && [1, 2, 4].includes(index))}
               className={`${step === index ? "current" : ""} ${index < step ? "complete" : ""}`}
               aria-current={step === index ? "step" : undefined}
               onClick={() => go(index)}
@@ -312,6 +339,11 @@ export default function App() {
             </button>
           ))}
         </nav>
+        {demo && step > 0 && (
+          <p className="editor-warning" role="status">
+            화면 데모 · 샘플 영역으로 편집을 체험해요. 실제 AI 탐지·재검증·Gemini 생성은 실행하지 않아요.
+          </p>
+        )}
         {error && (
           <div className="alert error" role="alert">
             <Icon name="info" />
@@ -323,7 +355,7 @@ export default function App() {
         )}
 
         {step === 0 ? (
-          <Home busy={!!busy} onStart={() => go(1)} onSample={sample} />
+          <Home busy={!!busy} onStart={() => { if (demo) reset(); go(1); }} onSample={sample} />
         ) : (
           <>
             <div className="page-heading">
@@ -332,9 +364,9 @@ export default function App() {
                   STEP {String(step + 1).padStart(2, "0")} / {STEPS[step]}
                 </span>
                 <h1 ref={heading} tabIndex={-1}>
-                  {step === 2 ? `${TITLES[2]} ${clues.length}개` : TITLES[step]}
+                  {demo && step === 5 ? "샘플 편집 결과 미리보기" : step === 2 ? `${TITLES[2]} ${clues.length}개` : TITLES[step]}
                 </h1>
-                <p>{SUBTITLES[step]}</p>
+                <p>{demo ? "서버 연결 없이 세 유형의 편집 도구와 영역 조절을 체험해 보세요." : SUBTITLES[step]}</p>
               </div>
             </div>
 
@@ -368,10 +400,18 @@ export default function App() {
             )}
             {step === 3 && (
               <Editor
+                demo={demo}
                 photos={photos}
                 clues={clues}
                 textClueCount={clues.filter((c) => c.kind === "text").length}
-                onChange={changeAction}
+                busy={!!busy}
+                generationAttempts={generationAttempts}
+                onGenerationAttempt={(index) => setGenerationAttempts((all) => ({
+                  ...all, [index]: (all[index] ?? 0) + 1,
+                }))}
+                onChange={changeRegion}
+                onGenerated={generatedRegion}
+                onBusy={(value) => setBusy(value ? "Gemini가 배경을 생성하고 있어요" : "")}
                 onReset={resetPhoto}
                 onApply={requestApply}
                 onZoom={setZoom}
@@ -394,15 +434,16 @@ export default function App() {
             )}
             {step === 5 && (
               <ResultView
+                backLabel={demo ? "편집으로 돌아가기" : undefined}
                 photos={outputs}
                 text={outputText}
                 notice={
-                  skippedEdit
+                  demo ? "화면 데모 결과예요. AI 탐지와 재검증을 실행하지 않았어요." : skippedEdit
                     ? `보호 편집 없이 넘어왔어요. 찾은 단서 ${clues.length}개가 그대로 있어요. 사진 파일 정보만 지웠어요.`
                     : undefined
                 }
                 onRestart={reset}
-                onBack={() => go(skippedEdit ? 2 : 4)}
+                onBack={() => go(demo ? 3 : skippedEdit ? 2 : 4)}
               />
             )}
           </>

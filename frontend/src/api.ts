@@ -103,6 +103,29 @@ export const getPost = (id: string) => request<PostStatus>(`/api/posts/${id}`);
 export const getPostReport = (id: string) => request<PostReport>(`/api/posts/${id}/report`);
 export const getPostResult = (id: string) => request<PostResult>(`/api/posts/${id}/result`);
 
+export const getGenerationStatus = () =>
+  request<{ enabled: boolean }>("/api/images/regenerate");
+
+/** 보호 전처리가 끝난 사진을 전달한다. 게시물/분석 작업과 독립적이다. */
+export async function regenerateBackground(image: Blob, bbox: [number, number, number, number]): Promise<Blob> {
+  const form = new FormData();
+  form.append("file", image, "edited.png");
+  form.append("bbox", JSON.stringify(bbox));
+  let response: Response;
+  try {
+    response = await fetch("/api/images/regenerate", { method: "POST", body: form });
+  } catch {
+    throw new ApiError("생성 응답을 받지 못했어요. 호출 횟수를 확인한 뒤 다시 시도해 주세요.");
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(typeof body?.detail === "string" ? body.detail : errorMessage(response.status));
+  }
+  const blob = await response.blob();
+  if (blob.type !== "image/png") throw new ApiError("생성된 이미지 형식이 올바르지 않아요.");
+  return blob;
+}
+
 /** 고른 처리 방법과, 처음 올린 원본 사진들(같은 순서)을 다시 보낸다. */
 export function transformPost(id: string, choices: Choice[], files: File[]) {
   const form = new FormData();

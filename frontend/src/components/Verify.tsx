@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { matchKept, regionLetters, type Clue } from "../flow";
+import { ACTION_LABEL, matchKept, overlap, regionLetters, type Clue } from "../flow";
 import type { Photo } from "../media";
 import { Filmstrip } from "./Analysis";
 import Icon from "./Icon";
 
-const DONE_WORD = { blur: "흐리게 가렸어요", mask: "덮어서 가렸어요", remove: "지웠어요", skip: "" };
 
 type Row = { key: string; ok: boolean; title: string; detail: string };
 
@@ -63,9 +62,9 @@ export default function Verify({
             }
           : {
               key: c.key,
-              ok: true,
-              title: `${prefix}${c.title} 보호`,
-              detail: `${letter} 영역을 ${DONE_WORD[c.action]}.`,
+              ok: (c.bbox == null || c.originalBox == null || c.bbox[2] - c.bbox[0] >= c.originalBox[2] - c.originalBox[0]) && c.action !== "partialMask" && !remaining.some((r) => r.imageIndex === imageIndex && overlap(c.bbox, r.bbox) > 0.1),
+              title: `${prefix}${c.title} 편집 적용`,
+              detail: `${letter} 영역에 ${ACTION_LABEL[c.action]} 적용. 결과와 잔여 단서를 확인해 주세요.`,
             },
       );
     }
@@ -113,9 +112,9 @@ export default function Verify({
           <Icon name={warnings ? "info" : "shield"} size={25} />
         </span>
         <div>
-          <span className="eyebrow">③ 변환 → ② 재검증 완료</span>
+          <span className="eyebrow">브라우저 편집 · 결과 확인</span>
           <h2>{warnings ? `확인이 필요한 단서가 ${warnings}개 있어요` : "보호 효과를 확인했어요"}</h2>
-          <p>편집된 사진과 글을 다시 분석한 결과예요. 아직 남아 있는 단서도 확인해 보세요.</p>
+          <p>편집 결과와 다시 분석한 잔여 단서를 확인해 보세요. 빈 게시물은 재분석하지 않아요.</p>
         </div>
         {b != null && a != null && (
           <div className="risk-meter" aria-label={`노출 위험 ${b}에서 ${a}로`}>

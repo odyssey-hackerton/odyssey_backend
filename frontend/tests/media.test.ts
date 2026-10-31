@@ -18,3 +18,13 @@ test("invalid and out-of-bounds detection rectangles cannot reach the editor", (
   assert.deepEqual(validBox([-10, -20, 120, 110], 100, 100), [0, 0, 100, 100]);
   assert.equal(validBox(undefined, 100, 100), null);
 });
+
+test("blur spreads pixels smoothly without changing opacity, including single-pixel areas", async () => {
+  const { blurPixels } = await import("../src/media.ts");
+  const data = new Uint8ClampedArray([0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255]);
+  blurPixels(data, 3, 1, 1);
+  assert.deepEqual([...data], [85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255]);
+  const single = new Uint8ClampedArray([20, 40, 60, 255]);
+  blurPixels(single, 1, 1, 80);
+  assert.deepEqual([...single], [20, 40, 60, 255]);
+});
