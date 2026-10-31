@@ -1,0 +1,58 @@
+model_list:
+  - model_name: odyssey-llm
+    litellm_params:
+      model: os.environ/LLM_MODEL
+      api_base: os.environ/LLM_API_BASE
+      api_key: os.environ/LLM_API_KEY
+    model_info:
+      mode: chat
+  - model_name: odyssey-llm-fallback
+    litellm_params:
+      model: os.environ/LLM_FALLBACK_MODEL
+      api_base: os.environ/LLM_FALLBACK_API_BASE
+      api_key: os.environ/LLM_FALLBACK_API_KEY
+    model_info:
+      mode: chat
+  - model_name: odyssey-vlm
+    litellm_params:
+      model: os.environ/VLM_MODEL
+      api_base: os.environ/VLM_API_BASE
+      api_key: os.environ/VLM_API_KEY
+    model_info:
+      mode: chat
+      supports_vision: true
+  - model_name: odyssey-vlm-fallback
+    litellm_params:
+      model: os.environ/VLM_FALLBACK_MODEL
+      api_base: os.environ/VLM_FALLBACK_API_BASE
+      api_key: os.environ/VLM_FALLBACK_API_KEY
+    model_info:
+      mode: chat
+      supports_vision: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true
+  disable_spend_logs: false
+  store_prompts_in_spend_logs: false
+
+litellm_settings:
+  turn_off_message_logging: true
+  redact_messages_in_exceptions: true
+  # 신규 키의 초기값. 실제 모델·시연 예산에 맞춰 관리자 UI에서 조정한다.
+  default_key_generate_params:
+    models: [odyssey-llm, odyssey-llm-fallback, odyssey-vlm, odyssey-vlm-fallback]
+    allowed_routes: [llm_api_routes]
+    max_budget: 5
+    budget_duration: 1d
+    rpm_limit: 30
+    tpm_limit: 30000
+
+router_settings:
+  # 재시도는 호출자와 중복 적용하지 않는다.
+  num_retries: 0
+  timeout: 90
+  fallbacks:
+    - odyssey-llm: [odyssey-llm-fallback]
+    - odyssey-vlm: [odyssey-vlm-fallback]
