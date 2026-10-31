@@ -6,7 +6,7 @@
 - **PostgreSQL**: 작업·결과 메타데이터
 - **Redis**: 작업 큐(`jobs`), 결과 큐(`results`), 진행 상태(`job:{id}`)
 - **AWS S3**: 원본·결과 이미지
-- **React 프론트** (`frontend/`): 6단계 보호 편집 화면. 지금은 서버 API를 쓰지 않고 브라우저에서만 동작
+- **React 프론트** (`frontend/`): 6단계 보호 편집 화면. 게시물 API(`/api/posts`)를 쓴다
 - **Nginx**: 프론트 서빙, `/api` 리버스 프록시
 - **LiteLLM**: LLM/VLM 프록시·폴백, 관리자 UI, 키별 토큰·비용 관리 ([설정](#litellm-프록시))
 - **Mock 워커**: 실제 AI 워커 없이 전체 흐름을 개발·시연하기 위한 가짜 워커
@@ -22,12 +22,13 @@ uv sync
 uv run ruff check . && uv run ruff format --check . && uv run pytest
 ```
 
-프론트 (Node.js 20 이상). 지금 프론트는 서버 API를 호출하지 않고 브라우저에서만 동작하므로 백엔드 없이 바로 개발할 수 있습니다. 화면 흐름과 브라우저에서 하는 일은 [frontend/README.md](frontend/README.md)를 참고하세요.
+프론트 (Node.js 20 이상). 화면 흐름과 API 연결은 [frontend/README.md](frontend/README.md)를 참고하세요. 화면만 고칠 때는 서버의 API에 붙여서 개발하면 됩니다.
 
 ```bash
 cd frontend
 npm install
-npm run dev     # http://localhost:5173
+VITE_API_TARGET=http://10.1.1.27 npm run dev   # 서버 API 사용 (VPN 필요), http://localhost:5173
+npm run dev                                     # 로컬 백엔드(localhost:8000) 사용
 npm test
 npm run build   # 타입 검사 + 빌드 확인
 ```
@@ -307,6 +308,20 @@ docker compose --env-file .env --env-file litellm/.env stop litellm litellm-db
 
 자세한 요청·응답 형식과 예시는 Swagger 문서(`http://10.1.1.27/docs`)에 있습니다.
 
+웹 화면은 **게시물 API**를 씁니다. 게시물 = 사진 최대 4장 + 글이고, 서버가 사진마다 작업(job)을 하나씩 만들어 묶습니다. 글은 0번 사진 작업과 함께 분석됩니다. AI 워커와의 메시지 형식은 바뀌지 않습니다.
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/posts` | `files`(사진 0~4장, 순서 = `position`) + `text`. 모든 사진을 먼저 검사하고 사진마다 작업 생성. `202` + `post_id` |
+| `GET` | `/api/posts/{id}` | 전체 상태(가장 늦은 항목 기준)와 항목별 상태 |
+| `GET` | `/api/posts/{id}/events` | SSE. `progress`, 모두 분석이 끝나면 `awaiting_user`, 끝나면 `done` |
+| `GET` | `/api/posts/{id}/report` | 항목별 단서(`findings`)와 위험도. 분석 단계와 완료 후(재검증에서 남은 단서) 모두 조회 |
+| `POST` | `/api/posts/{id}/transform` | `choices`(`[{position, idx, action}]`) + 처음 올린 원본 사진들(같은 순서). 모든 항목을 확인한 뒤에 시작 |
+| `GET` | `/api/posts/{id}/result` | 처리된 글과 항목별 결과 사진 주소(`/api/jobs/{job_id}/image`) |
+| `GET` | `/api/jobs/{id}/image` | 결과 사진을 서버를 거쳐 내려줌. 같은 주소라 S3 CORS 설정 없이 공유·다운로드 가능 |
+
+사진 1장 단위로 쓰는 작업 API도 그대로 있습니다.
+
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | `POST` | `/api/jobs` | `multipart/form-data`로 `file`(jpg·png·webp, 10MB 이하), `text`(5,000자 이하), 또는 둘 다. `202` + `job_id` |
@@ -314,6 +329,7 @@ docker compose --env-file .env --env-file litellm/.env stop litellm litellm-db
 | `GET` | `/api/jobs/{id}/events` | SSE. 상태가 바뀔 때마다 `progress`, 끝나면 `done` 이벤트 |
 | `GET` | `/api/jobs/{id}/result` | 이미지: presigned URL(5분), 글: 가린 글, 사진 + 글: 둘 다. 완료 전이면 `409` |
 | `GET` | `/api/jobs/{id}/report` | 위험도 전후, 탐지 항목, 반복 횟수 |
+| `POST` | `/api/jobs/{id}/transform` | 사용자 선택(`choices`) + 원본 사진으로 변환 시작 |
 | `GET` | `/api/health` | DB·Redis 확인. `?deep=true`면 S3까지 |
 
 입력 종류(`input_type`)는 보낸 필드로 정해집니다. `file`만 보내면 `image`, `text`만 보내면 `text`, 둘 다 보내면 `image_text`입니다. `image_text`는 사진과 글(예: 게시물 사진과 본문)을 AI가 한 작업에서 함께 분석하고, 결과도 처리된 이미지와 가린 글을 함께 돌려줍니다.
