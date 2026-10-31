@@ -11,36 +11,55 @@ import json
 import sys
 
 import httpx
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 def make_image() -> bytes:
     buf = io.BytesIO()
-    Image.new("RGB", (320, 240), (90, 140, 200)).save(buf, format="JPEG")
+    image = Image.new("RGB", (640, 320), "white")
+    ImageDraw.Draw(image).text((30, 100), "TEST ONLY: 010-0000-0000", fill="black", font_size=32)
+    image.save(buf, format="JPEG")
     return buf.getvalue()
+
+
+def wait_for_phase(client: httpx.Client, job_id: str) -> str | None:
+    with client.stream("GET", f"/api/jobs/{job_id}/events", timeout=180) as stream:
+        stream.raise_for_status()
+        event = None
+        for line in stream.iter_lines():
+            if line.startswith("event:"):
+                event = line.split(":", 1)[1].strip()
+            elif line.startswith("data:") and event in ("progress", "done", "awaiting_user"):
+                data = json.loads(line.split(":", 1)[1])
+                print(f"  {event}: {data['status']}")
+                if event in ("done", "awaiting_user"):
+                    return data["status"]
+    return None
 
 
 def main(base: str) -> int:
     with httpx.Client(base_url=base, timeout=30) as client:
         print("health:", client.get("/api/health").json())
 
-        r = client.post("/api/jobs", files={"file": ("test.jpg", make_image(), "image/jpeg")})
+        original = make_image()
+        r = client.post(
+            "/api/jobs",
+            files={"file": ("test.jpg", original, "image/jpeg")},
+            data={"text": "가짜 테스트 연락처: 010-0000-0000"},
+        )
         r.raise_for_status()
         job_id = r.json()["job_id"]
         print("job:", job_id)
 
-        final = None
-        with client.stream("GET", f"/api/jobs/{job_id}/events", timeout=120) as s:
-            event = None
-            for line in s.iter_lines():
-                if line.startswith("event:"):
-                    event = line.split(":", 1)[1].strip()
-                elif line.startswith("data:") and event in ("progress", "done"):
-                    data = json.loads(line.split(":", 1)[1])
-                    print(f"  {event}: {data['status']}")
-                    if event == "done":
-                        final = data["status"]
-                        break
+        final = wait_for_phase(client, job_id)
+        if final == "AWAITING_USER":
+            response = client.post(
+                f"/api/jobs/{job_id}/transform",
+                data={"choices": "[]"},
+                files={"file": ("test.jpg", original, "image/jpeg")},
+            )
+            response.raise_for_status()
+            final = wait_for_phase(client, job_id)
         if final != "DONE":
             print("FAILED: final status", final)
             return 1

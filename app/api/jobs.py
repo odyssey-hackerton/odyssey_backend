@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
@@ -16,17 +17,20 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import RedisDep, SessionDep, SettingsDep, StorageDep
+from app.core.config import Settings
 from app.db.models import Job
 from app.queue.producer import enqueue_job
 from app.queue.progress import get_progress, set_progress
 from app.schemas.contract import (
     FINAL_STATUSES,
     TERMINAL_STATUSES,
+    Finding,
     InputType,
     JobMessage,
     JobOptions,
@@ -41,7 +45,7 @@ from app.schemas.jobs import (
     JobStatusOut,
     TransformRequest,
 )
-from app.services.uploads import detect_image_type
+from app.services.uploads import ImageType, detect_image_type
 from app.storage.s3 import original_key
 
 logger = logging.getLogger(__name__)
@@ -51,18 +55,47 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 def _text_cache_key(job_id: str) -> str:
     return f"text:{job_id}"
 
+
 SSE_POLL_SECONDS = 0.5
 SSE_MAX_SECONDS = 600
 
 
-async def _get_job(session: SessionDep, job_id: uuid.UUID, with_result: bool = False) -> Job:
+async def _get_job(
+    session: SessionDep, job_id: uuid.UUID, with_result: bool = False, *, for_update: bool = False
+) -> Job:
     stmt = select(Job).where(Job.id == job_id)
     if with_result:
         stmt = stmt.options(selectinload(Job.result))
+    if for_update:
+        stmt = stmt.with_for_update(of=Job)
     job = (await session.execute(stmt)).scalar_one_or_none()
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
     return job
+
+
+async def _read_image(file: UploadFile, settings: Settings) -> tuple[bytes, ImageType]:
+    try:
+        data = await file.read(settings.max_upload_bytes + 1)
+    finally:
+        await file.close()
+    if len(data) > settings.max_upload_bytes:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "파일이 너무 큽니다")
+    image_type = detect_image_type(data[:16])
+    if image_type is None:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "jpg, png, webp 이미지만 지원합니다"
+        )
+    return data, image_type
+
+
+async def _discard_upload(storage: StorageDep, key: str | None) -> None:
+    if key:
+        try:
+            await storage.delete(key)
+        except Exception:
+            # shortcut: DB/큐까지 실패한 업로드의 정리는 S3 1일 수명 주기가 최후 방어선이다.
+            logger.error("temporary upload cleanup failed", exc_info=False)
 
 
 def input_type_of(*, has_image: bool, has_text: bool) -> InputType:
@@ -148,27 +181,41 @@ async def create_job(
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "텍스트가 너무 깁니다")
 
     job_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
     object_key: str | None = None
+    input_sha256: str | None = None
 
     if file is not None:
-        data = await file.read(settings.max_upload_bytes + 1)
-        if len(data) > settings.max_upload_bytes:
-            raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "파일이 너무 큽니다")
-        image_type = detect_image_type(data[:16])
-        if image_type is None:
-            raise HTTPException(
-                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "jpg, png, webp 이미지만 지원합니다"
-            )
-        object_key = original_key(str(job_id), image_type.ext)
-        await storage.put(object_key, data, image_type.content_type)
+        data, image_type = await _read_image(file, settings)
+        input_sha256 = hashlib.sha256(data).hexdigest()
+        object_key = original_key(f"{job_id}/{execution_id}", image_type.ext)
+        try:
+            await storage.put(object_key, data, image_type.content_type)
+        except Exception:
+            await _discard_upload(storage, object_key)
+            raise HTTPException(503, "사진 저장에 실패했습니다") from None
+        finally:
+            del data
 
     input_type = input_type_of(has_image=file is not None, has_text=text is not None)
-    job = Job(id=job_id, input_type=input_type, status=JobStatus.QUEUED, object_key=object_key)
+    job = Job(
+        id=job_id,
+        input_type=input_type,
+        status=JobStatus.QUEUED,
+        object_key=object_key,
+        input_sha256=input_sha256,
+        execution_id=execution_id,
+    )
     session.add(job)
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception:
+        await _discard_upload(storage, object_key)
+        raise
 
     message = JobMessage(
         job_id=job_id,
+        execution_id=execution_id,
         input_type=input_type,
         object_key=object_key,
         text=text,
@@ -184,6 +231,7 @@ async def create_job(
             await redis.setex(_text_cache_key(str(job_id)), settings.progress_ttl_seconds, text)
         await enqueue_job(redis, settings.jobs_stream, message, settings.stream_maxlen)
     except Exception:
+        await _discard_upload(storage, object_key)
         logger.exception("enqueue failed for job %s", job_id)
         job.status = JobStatus.FAILED
         job.error = "enqueue failed"
@@ -203,6 +251,8 @@ def _status_out(job: Job, progress: dict[str, str]) -> JobStatusOut:
         current = progress.get("status", job.status)
         if current in FINAL_STATUSES:
             current = JobStatus.VERIFYING  # DB 저장 전이면 아직 끝나지 않은 것으로 본다
+        elif current == JobStatus.AWAITING_USER:
+            current = job.status  # 이전 분석의 늦은 Redis 갱신이 새 편집의 SSE를 닫지 않게 한다.
         iteration = int(progress.get("iteration") or 0)
         message = progress.get("message") or None
     return JobStatusOut(
@@ -329,40 +379,87 @@ async def submit_transform(
     session: SessionDep,
     redis: RedisDep,
     settings: SettingsDep,
-    body: TransformRequest,
+    storage: StorageDep,
+    choices: Annotated[str, Form(description='JSON 배열: [{"idx": 0, "action": "mask"}]')],
+    file: Annotated[UploadFile | None, File(description="최초 분석과 동일한 원본 파일")] = None,
 ) -> JobCreated:
     """탐지·분석(`AWAITING_USER`) 결과를 확인한 뒤 항목별 처리 방법을 골라 변환을 시작한다.
 
-    `/report`로 받은 `findings` 리스트의 인덱스(`idx`)와 처리 방법(`action`)을 보낸다.
+    `multipart/form-data`로 최초 분석과 동일한 원본 파일 및 JSON 배열 `choices`를 보낸다.
+    `/report`로 받은 `findings` 리스트의 인덱스(`idx`)와 처리 방법(`action`)을 사용한다.
     목록에 없는 항목은 AI가 추천한 action을 그대로 사용한다.
 
     ```bash
     curl -X POST http://10.1.1.27/api/jobs/{job_id}/transform \\
-         -H "Content-Type: application/json" \\
-         -d '{"choices": [{"idx": 0, "action": "blur"}, {"idx": 2, "action": "skip"}]}'
+         -F file=@photo.jpg \\
+         -F 'choices=[{"idx": 0, "action": "blur"}]'
     ```
     """
-    job = await _get_job(session, job_id, with_result=True)
+    try:
+        body = TransformRequest.model_validate({"choices": json.loads(choices)})
+    except (ValueError, ValidationError):
+        raise HTTPException(422, "choices는 유효한 선택 목록이어야 합니다") from None
+    job = await _get_job(session, job_id, with_result=True, for_update=True)
     if job.status != JobStatus.AWAITING_USER:
         raise HTTPException(status.HTTP_409_CONFLICT, f"job is {job.status}")
+    if job.result is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "analysis result is missing")
+    indices = [choice.idx for choice in body.choices]
+    if len(set(indices)) != len(indices) or any(i >= len(job.result.findings) for i in indices):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid finding indices")
+
+    has_image = job.input_type in ("image", "image_text")
+    if has_image and (file is None or not job.input_sha256):
+        raise HTTPException(409, "분석한 원본 사진이 필요합니다. 사진을 다시 선택해 주세요")
+    if not has_image and file is not None:
+        raise HTTPException(422, "텍스트 작업에는 사진을 추가할 수 없습니다")
+    initial_findings = [Finding.model_validate(f) for f in job.result.findings]
 
     # Redis에 임시 보관한 원본 텍스트 복원
     cached = await redis.get(_text_cache_key(str(job_id)))
-    text = cached.decode() if cached else None
+    text = cached
+    if job.input_type in ("text", "image_text") and text is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "원본 글이 만료되었습니다. 다시 업로드해 주세요"
+        )
+
+    execution_id = uuid.uuid4()
+    object_key = None
+    if file is not None:
+        data, image_type = await _read_image(file, settings)
+        if hashlib.sha256(data).hexdigest() != job.input_sha256:
+            raise HTTPException(409, "처음 분석한 사진과 다릅니다. 같은 원본 파일을 선택해 주세요")
+        object_key = original_key(f"{job_id}/{execution_id}", image_type.ext)
+        try:
+            await storage.put(object_key, data, image_type.content_type)
+        except Exception:
+            await _discard_upload(storage, object_key)
+            raise HTTPException(503, "사진 저장에 실패했습니다") from None
+        finally:
+            del data
 
     user_choices = [UserChoice(idx=c.idx, action=c.action) for c in body.choices]
     message = JobMessage(
         job_id=job_id,
+        execution_id=execution_id,
         input_type=job.input_type,
-        object_key=job.object_key,
+        object_key=object_key,
         text=text,
         options=JobOptions(max_iterations=settings.max_iterations),
         created_at=datetime.now(UTC),
         user_choices=user_choices,
+        initial_findings=initial_findings,
     )
 
+    previous_execution = job.execution_id
     job.status = JobStatus.QUEUED
-    await session.commit()
+    job.execution_id = execution_id
+    job.object_key = object_key
+    try:
+        await session.commit()
+    except Exception:
+        await _discard_upload(storage, object_key)
+        raise
 
     try:
         await set_progress(
@@ -370,8 +467,11 @@ async def submit_transform(
         )
         await enqueue_job(redis, settings.jobs_stream, message, settings.stream_maxlen)
     except Exception:
+        await _discard_upload(storage, object_key)
         logger.exception("enqueue transform failed for job %s", job_id)
         job.status = JobStatus.AWAITING_USER
+        job.execution_id = previous_execution
+        job.object_key = None
         await session.commit()
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "작업 등록에 실패했습니다"

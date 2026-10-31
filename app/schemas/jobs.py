@@ -140,8 +140,10 @@ class JobReportOut(BaseModel):
 class UserChoiceIn(BaseModel):
     """사용자가 선택한 탐지 항목 처리 방법."""
 
-    idx: int = Field(description="findings 리스트 인덱스")
-    action: str = Field(description="`blur` | `mask` | `remove` | `skip`", examples=["blur"])
+    idx: int = Field(ge=0, description="findings 리스트 인덱스")
+    action: Literal["blur", "mask", "remove", "skip"] = Field(
+        description="`blur` | `mask` | `remove` | `skip`", examples=["blur"]
+    )
 
 
 class TransformRequest(BaseModel):

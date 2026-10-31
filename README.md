@@ -24,6 +24,8 @@ uv run ruff check . && uv run ruff format --check . && uv run pytest
 
 프론트 (Node.js 20 이상). 화면만 고칠 때는 서버의 API에 붙여서 개발하면 됩니다.
 
+6단계 React 테스트 UI의 데모/API 모드와 실행 절차는 [frontend/README.md](frontend/README.md), 화면별 API 현황과 추가 계획은 [docs/ui-api-plan.md](docs/ui-api-plan.md)를 참고하세요.
+
 ```bash
 cd frontend
 npm install
@@ -45,7 +47,7 @@ uv run python scripts/smoke_test.py http://localhost
 ### 1. AWS 준비 (한 번만)
 
 1. S3 버킷 생성: 리전 `ap-northeast-2`, 퍼블릭 액세스 차단 ON, 기본 암호화 SSE-S3
-2. 수명 주기 규칙: 접두사 `originals/`, 생성 후 1일 뒤 만료 삭제
+2. 수명 주기 규칙: 접두사 `originals/`, 생성 후 1일 뒤 만료 삭제 (워커의 즉시 삭제가 누락됐을 때 보조 정리)
 3. IAM 사용자 2개를 만들고 각각 아래 정책만 연결한 뒤 액세스 키 발급
 
 API 서버용:
@@ -56,7 +58,8 @@ API 서버용:
   "Statement": [
     { "Effect": "Allow", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::odyssey-hackarton-images/originals/*" },
     { "Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::odyssey-hackarton-images/results/*" },
-    { "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::odyssey-hackarton-images" }
+    { "Effect": "Allow", "Action": ["s3:ListBucket", "s3:ListBucketVersions"], "Resource": "arn:aws:s3:::odyssey-hackarton-images" },
+    { "Effect": "Allow", "Action": ["s3:DeleteObject", "s3:DeleteObjectVersion"], "Resource": "arn:aws:s3:::odyssey-hackarton-images/originals/*" }
   ]
 }
 ```
@@ -67,7 +70,8 @@ GPU 워커용:
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::odyssey-hackarton-images/originals/*" },
+    { "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"], "Resource": "arn:aws:s3:::odyssey-hackarton-images/originals/*" },
+    { "Effect": "Allow", "Action": "s3:ListBucketVersions", "Resource": "arn:aws:s3:::odyssey-hackarton-images" },
     { "Effect": "Allow", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::odyssey-hackarton-images/results/*" }
   ]
 }
@@ -348,3 +352,31 @@ scripts/        이미지 빌드·푸시, 스모크 테스트
 ```
 
 DB 스키마를 바꿀 때: `app/db/models.py` 수정 → `migrations/versions/`에 다음 번호의 마이그레이션 추가(`0001_create_jobs.py` 참고). 배포 시 API 컨테이너가 자동으로 적용합니다.
+
+
+## 원본 삭제·편집 재전송 적용
+
+탐지 직후 서버 원본을 삭제한다. 프론트는 원본 File을 메모리에 유지하고,
+`POST /api/jobs/{id}/transform`에 multipart `file`과 JSON 배열 문자열 `choices`를 다시 보낸다.
+사진은 최초 파일과 SHA-256이 일치해야 한다. 본문만 있는 작업에는 file을 생략한다.
+새로고침하면 사진을 다시 선택해야 한다. 탐지 0개인 사진도 결과를 재인코딩해 메타데이터를 제거한다.
+
+```sh
+curl -X POST http://localhost/api/jobs/JOB_ID/transform \
+  -F file=@original.jpg -F 'choices=[{"idx":0,"action":"mask"}]'
+```
+
+적용에는 DB migration `0002`, 큐 계약 v2의 API·워커, 프론트를 함께 갱신해야 한다.
+v1 작업/워커와 혼용하지 않는다. 이전 작업에는 파일 해시가 없으므로 다시 업로드한다.
+위 IAM 예시의 삭제·버전 조회 권한도 반영해야 하며, 버킷 기본값은 양쪽 모두
+`odyssey-hackarton-images`다. 이 변경으로 AWS 설정이나 실제 배포를 실행하지는 않았다.
+
+워커는 탐지 결과/임시 편집본 체크포인트를 먼저 남긴 뒤 원본을 삭제하고,
+삭제 완료 전에는 결과를 발행하지 않는다. 실행 ID·잠금·완료 결과 캐시로 중복 처리를 막는다.
+삭제 실패는 pending 작업으로 재시도한다. API에서 DB/큐 등록 자체가 실패하면 업로드 삭제를
+시도하며, 인프라 장애로 이 삭제까지 실패한 경우 기존 1일 수명 주기에 의존한다.
+체크포인트는 기본 24시간 동안 유지한다. 결과 이미지 보관 기간은 별도 설정 대상이다.
+
+Compose는 API의 임시 업로드 파일과 Nginx 업로드 버퍼를 `/tmp` tmpfs에 둔다.
+Compose 밖에서 실행할 때는 별도 메모리 임시 디렉터리가 필요하다.
+현재 Gemini 호출은 외부 서비스 전송이므로 S3 삭제가 외부 서비스 삭제를 보장하지 않는다.

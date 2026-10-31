@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,7 +32,7 @@ class Settings(BaseSettings):
     results_group: str = "api"
     stream_maxlen: int = 10000
     progress_ttl_seconds: int = 24 * 3600
-    max_iterations: int = 3
+    max_iterations: int = Field(default=3, ge=1, le=3)
 
     # 프론트 개발 서버 등 다른 출처에서 호출할 때만 (예: ["http://localhost:5173"])
     cors_origins: list[str] = []

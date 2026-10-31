@@ -1,4 +1,4 @@
-"""API-워커 큐 메시지 계약 v1.
+"""API-워커 큐 메시지 계약 v2.
 
 AI 쪽은 모델과 로직이 자주 바뀌므로 아래 규칙으로 변경에 강하게 만든다.
 - 모르는 필드는 무시한다 (extra="ignore").
@@ -23,7 +23,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class JobStatus(StrEnum):
@@ -47,7 +47,7 @@ class ContractModel(BaseModel):
 
 
 class JobOptions(ContractModel):
-    max_iterations: int = 3
+    max_iterations: int = Field(default=3, ge=1, le=3)
 
 
 InputType = Literal["image", "text", "image_text"]
@@ -58,21 +58,6 @@ class UserChoice(ContractModel):
 
     idx: int  # findings 리스트 인덱스
     action: str  # "blur" | "mask" | "remove" | "skip"
-
-
-class JobMessage(ContractModel):
-    """jobs stream (API → 워커)"""
-
-    schema_version: int = SCHEMA_VERSION
-    job_id: UUID
-    input_type: InputType
-    object_key: str | None = None  # 원본 이미지 S3 키 (image, image_text)
-    text: str | None = None  # 원본 글 (text, image_text). Postgres에는 저장하지 않는다.
-    options: JobOptions = Field(default_factory=JobOptions)
-    created_at: datetime
-    # None이면 Phase 1 (탐지·분석만 → AWAITING_USER 반환)
-    # 값이 있으면 Phase 2 (사용자 선택 반영 후 변환·검증 실행)
-    user_choices: list[UserChoice] | None = None
 
 
 class Finding(BaseModel):
@@ -87,11 +72,30 @@ class Finding(BaseModel):
     action: str | None = None
 
 
+class JobMessage(ContractModel):
+    """jobs stream (API → 워커)"""
+
+    schema_version: Literal[2] = SCHEMA_VERSION
+    job_id: UUID
+    execution_id: UUID
+    input_type: InputType
+    object_key: str | None = None  # 원본 이미지 S3 키 (image, image_text)
+    text: str | None = None  # 원본 글 (text, image_text). Postgres에는 저장하지 않는다.
+    options: JobOptions = Field(default_factory=JobOptions)
+    created_at: datetime
+    # None이면 Phase 1 (탐지·분석만 → AWAITING_USER 반환)
+    # 값이 있으면 Phase 2 (사용자 선택 반영 후 변환·검증 실행)
+    user_choices: list[UserChoice] | None = None
+    # Phase 1에 표시한 항목을 그대로 편집한다. 재탐지로 인덱스를 바꾸지 않는다.
+    initial_findings: list[Finding] | None = None
+
+
 class ResultMessage(ContractModel):
     """results stream (워커 → API)"""
 
-    schema_version: int = SCHEMA_VERSION
+    schema_version: Literal[2] = SCHEMA_VERSION
     job_id: UUID
+    execution_id: UUID
     status: Literal["DONE", "FAILED", "AWAITING_USER"]
     risk_detected: bool | None = None
     risk_before: float | None = None
