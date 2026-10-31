@@ -103,9 +103,6 @@ export const getPost = (id: string) => request<PostStatus>(`/api/posts/${id}`);
 export const getPostReport = (id: string) => request<PostReport>(`/api/posts/${id}/report`);
 export const getPostResult = (id: string) => request<PostResult>(`/api/posts/${id}/result`);
 
-export const getGenerationStatus = () =>
-  request<{ enabled: boolean }>("/api/images/regenerate");
-
 /** 보호 전처리가 끝난 사진을 전달한다. 게시물/분석 작업과 독립적이다. */
 export async function regenerateBackground(image: Blob, bbox: [number, number, number, number]): Promise<Blob> {
   const form = new FormData();

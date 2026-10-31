@@ -40,13 +40,13 @@ window.fetch = async (url, init) => {
   if (!String(url).startsWith('/api/')) return realFetch(url, init);
   window.__apiRequests.push(String(url));
   if (url === '/api/images/regenerate') {
-    if (!init) return Response.json({ enabled: true });
+    if (init?.method !== 'POST') throw new Error('Unexpected regeneration preflight');
     const img = await createImageBitmap(init.body.get('file'));
     const input = document.createElement('canvas'); input.width = img.width; input.height = img.height;
     const ctx = input.getContext('2d'); ctx.drawImage(img, 0, 0);
     window.__generationPixels = [80, 550].map(x => [...ctx.getImageData(x, 130, 1, 1).data]);
     window.__attempts++;
-    if (window.__attempts === 1) return Response.json({detail:'합성 생성 실패'}, {status:502});
+    if (window.__attempts === 1) return Response.json({detail:'서버에 Gemini 이미지 생성 키가 설정되지 않았어요.'}, {status:503});
     const c = document.createElement('canvas'); c.width = 200; c.height = 150;
     const x = c.getContext('2d'); x.fillStyle = '#55bb66'; x.fillRect(0,0,200,150);
     return new Response(await new Promise(r => c.toBlob(r)), { headers: { 'content-type': 'image/png' }});
@@ -120,6 +120,7 @@ for(let i=0;i<3;i++) {
   await until(`window.__attempts === ${i+1} && !document.querySelector('fieldset').disabled && !document.querySelector('.render-badge')`);
   assert.deepEqual(await evaluate(`window.__generationPixels`), [[20,33,56,255],[20,33,56,255]], 'generation receives protected text and target pixels');
   if (i === 0) {
+    assert.ok((await evaluate(`document.querySelector('.generation-panel').textContent`)).includes('키가 설정되지'));
     assert.equal(await evaluate(`document.querySelector('.control-footer .primary').disabled`), false, 'generation failure does not block ordinary editing');
     await evaluate(`document.querySelector('.undo-button').click()`);
     await until(`!document.querySelector('.render-badge')`);

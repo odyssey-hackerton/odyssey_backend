@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PostReport } from "../src/api.ts";
+import { HighlightedText } from "../src/components/Analysis.tsx";
 import {
   choicesFor,
+  cluesFromFindings,
   cluesFromReport,
   maskText,
   matchKept,
@@ -92,6 +94,44 @@ test("caption masking follows the worker rule: remove deletes, others become [�
   assert.equal(maskText(text, [{ ...phone, action: "skip" }]), text);
   const overlapping = { ...phone, spans: [[4, 10], [6, 13]] as [number, number][] };
   assert.equal(maskText(text, [overlapping]), "문의는 [가림]5678 또는 a@b.kr");
+});
+
+test("caption masking and highlighting use the worker's Unicode character positions", () => {
+  const cases = [
+    { text: "😀 연락처 010-1234-5678", start: 6, end: 19, before: "😀 연락처 ", value: "010-1234-5678", after: "" },
+    { text: "👩🏽‍💻 문의 a@b.kr 🚀", start: 8, end: 14, before: "👩🏽‍💻 문의 ", value: "a@b.kr", after: " 🚀" },
+    { text: "주소 😀서울🚀 끝", start: 3, end: 7, before: "주소 ", value: "😀서울🚀", after: " 끝" },
+  ];
+  for (const { text, start, end, before, value, after } of cases) {
+    const clues = cluesFromFindings([
+      { type: "personal", source: "text", spans: [[start, end]], action: "mask" },
+    ], 0, null);
+    assert.equal(maskText(text, clues), `${before}[가림]${after}`);
+    assert.equal(maskText(text, clues.map((c) => ({ ...c, action: "remove" }))), before + after);
+    assert.equal(maskText(text, clues.map((c) => ({ ...c, action: "skip" }))), text);
+    assert.deepEqual(
+      HighlightedText({ text, clues }).props.children.map((part) => [part.type, part.props.children]),
+      [...(before ? [["span", before]] : []), ["mark", value], ...(after ? [["span", after]] : [])],
+    );
+  }
+});
+
+test("Unicode masking preserves positions across multiple and overlapping edits", () => {
+  const text = "😀 010-1234-5678 🚀 a@b.kr";
+  const clues = cluesFromFindings([
+    { type: "phone", source: "text", spans: [[2, 8]], action: "remove" },
+    { type: "phone", source: "text", spans: [[6, 15]], action: "mask" },
+    { type: "email", source: "text", spans: [[18, 24]], action: "remove" },
+  ], 0, null);
+  assert.equal(maskText(text, clues), "😀 [가림] 🚀 ");
+  const invalid = cluesFromFindings([
+    { type: "personal", source: "text", spans: [[0, 3]], action: "mask" },
+  ], 0, null);
+  assert.equal(maskText("😀x", invalid), "😀x");
+  assert.deepEqual(
+    HighlightedText({ text: "😀x", clues: invalid }).props.children.map((part) => [part.type, part.props.children]),
+    [["span", "😀x"]],
+  );
 });
 
 test("a region kept as-is and found again by re-verification is reported once", () => {

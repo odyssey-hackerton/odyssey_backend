@@ -193,19 +193,20 @@ export function HighlightedText({
   clues: Clue[];
   compact?: boolean;
 }) {
+  const characters = Array.from(text);
   const spans = clues
     .flatMap((c) => c.spans ?? [])
-    .filter(([s, e]) => e <= text.length && s < e)
+    .filter(([s, e]) => e <= characters.length && s < e)
     .sort((a, b) => a[0] - b[0]);
   const parts: { text: string; hit: boolean }[] = [];
   let at = 0;
   for (const [s, e] of spans) {
     if (s < at) continue;
-    if (s > at) parts.push({ text: text.slice(at, s), hit: false });
-    parts.push({ text: text.slice(s, e), hit: true });
+    if (s > at) parts.push({ text: characters.slice(at, s).join(""), hit: false });
+    parts.push({ text: characters.slice(s, e).join(""), hit: true });
     at = e;
   }
-  if (at < text.length) parts.push({ text: text.slice(at), hit: false });
+  if (at < characters.length) parts.push({ text: characters.slice(at).join(""), hit: false });
   return (
     <p className={compact ? "caption-text" : "text-preview"}>
       {parts.map((p, i) => (p.hit ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>))}

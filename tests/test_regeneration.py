@@ -151,11 +151,17 @@ async def test_provider_failure_is_returned_without_retry(api_setup):
     generate.assert_called_once()
 
 
-@pytest.mark.parametrize(("key", "enabled"), [("", False), ("fake", True)])
-async def test_status_reports_availability_without_usage(key, enabled):
-    assert await api.generation_status(Settings(gemini_api_key=key)) == {
-        "enabled": enabled,
-    }
+@pytest.mark.parametrize("key", [None, ""])
+async def test_missing_key_rejects_generation_without_calling_provider(api_setup, key):
+    with pytest.raises(HTTPException) as error:
+        await api.regenerate(
+            Settings(gemini_api_key=key),
+            UploadFile(BytesIO(png()), filename="a.png"),
+            "[10,20,30,40]",
+        )
+    assert error.value.status_code == 503
+    assert "키가 설정되지" in error.value.detail
+    api_setup.assert_not_called()
 
 
 async def test_standalone_endpoint_needs_no_post_or_database(api_setup):
@@ -168,8 +174,7 @@ async def test_standalone_endpoint_needs_no_post_or_database(api_setup):
     app.include_router(api.router)
     app.dependency_overrides[get_settings] = lambda: Settings(gemini_api_key="fake")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        status = await client.get("/api/images/regenerate")
-        assert status.json() == {"enabled": True}
+        assert (await client.get("/api/images/regenerate")).status_code == 405
         response = await client.post(
             "/api/images/regenerate",
             files={"file": ("preprocessed.png", png(), "image/png")},

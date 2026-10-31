@@ -7,7 +7,6 @@ import ImageRegeneration from "./ImageRegeneration";
 import PhotoView, { clueColor } from "./PhotoView";
 import { RiskTag } from "./RiskTag";
 
-export { ACTION_LABEL } from "../flow";
 const TOOL_ICONS: Record<EditAction, IconName> = {
   mask: "eye", blur: "search", mosaic: "image", partialMask: "edit",
   remove: "erase", regenerate: "refresh", skip: "eye",

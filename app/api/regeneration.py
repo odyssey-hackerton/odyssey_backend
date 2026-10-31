@@ -12,16 +12,6 @@ from app.services.regeneration import generate_patch, prepare_image
 router = APIRouter(prefix="/api/images", tags=["images"])
 
 
-@router.get("/regenerate", summary="배경 생성 사용 가능 여부")
-async def generation_status(
-    settings: SettingsDep,
-) -> dict:
-    """이미지 생성 키 설정 여부를 반환한다. 호출 횟수는 프론트에서만 관리한다."""
-    return {
-        "enabled": bool(settings.gemini_api_key and settings.gemini_api_key.get_secret_value()),
-    }
-
-
 @router.post("/regenerate", summary="전처리 사진의 선택 영역 배경 생성")
 async def regenerate(
     settings: SettingsDep,

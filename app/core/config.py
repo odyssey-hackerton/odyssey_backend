@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 10 * 1024 * 1024
     max_text_chars: int = 5000
 
-    # 서버 전용 이미지 생성. 키가 없으면 편집 UI의 생성 버튼을 비활성화한다.
+    # 서버 전용 이미지 생성. 키가 없으면 생성 요청에 503으로 응답한다.
     gemini_api_key: SecretStr | None = None
     gemini_image_model: str = Field(default="gemini-nano-banana-2.1", pattern=r"^[a-zA-Z0-9._-]+$")
 

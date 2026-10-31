@@ -67,13 +67,13 @@ test("waiting stops at awaiting_user so the user can choose", async () => {
 });
 
 test("background generation sends edited pixels and geometry, and surfaces provider errors", async () => {
-  const { regenerateBackground, getGenerationStatus } = await import("../src/api.ts");
+  const { regenerateBackground } = await import("../src/api.ts");
   const original = globalThis.fetch;
   let requests = 0;
   globalThis.fetch = async (path, init) => {
     requests++;
     assert.equal(path, "/api/images/regenerate");
-    if (!init) return Response.json({ enabled: true });
+    assert.equal(init?.method, "POST");
     const form = init.body as FormData;
     assert.equal(await (form.get("file") as File).text(), "edited pixels");
     assert.deepEqual(JSON.parse(form.get("bbox") as string), [10, 20, 30, 40]);
@@ -81,8 +81,7 @@ test("background generation sends edited pixels and geometry, and surfaces provi
   };
   try {
     await assert.rejects(regenerateBackground(new Blob(["edited pixels"]), [10, 20, 30, 40]), /생성하지 못/);
-    assert.deepEqual(await getGenerationStatus(), { enabled: true });
-    assert.equal(requests, 2);
+    assert.equal(requests, 1);
   } finally { globalThis.fetch = original; }
 });
 

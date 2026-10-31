@@ -42,6 +42,7 @@ export interface Clue {
   description: string;
   risk?: Risk;
   bbox?: [number, number, number, number];
+  /** Python 워커의 유니코드 코드 포인트 기준 위치. */
   spans?: [number, number][];
   /** AI(③)가 추천한 처리. 되돌리기에 쓴다. */
   recommended: EditAction;
@@ -68,11 +69,12 @@ export function regionLetters(clues: Clue[], imageIndex: number): Map<string, st
  * remove 는 문구를 지우고, 나머지는 "[가림]" 으로 바꾼다. 겹친 범위는 합친다.
  */
 export function maskText(text: string, clues: Clue[]): string {
+  const characters = Array.from(text);
   const edits: [number, number, string][] = [];
   for (const c of clues) {
     if (c.kind !== "text" || c.action === "skip" || !c.spans) continue;
     for (const [start, end] of c.spans) {
-      if (end > text.length) continue;
+      if (end > characters.length) continue;
       edits.push([start, end, c.action === "remove" ? "" : "[가림]"]);
     }
   }
@@ -85,11 +87,10 @@ export function maskText(text: string, clues: Clue[]): string {
       last[2] = last[2] || e[2];
     } else merged.push([...e]);
   }
-  let out = text;
   for (const [start, end, replacement] of merged.reverse()) {
-    out = out.slice(0, start) + replacement + out.slice(end);
+    characters.splice(start, end - start, replacement);
   }
-  return out;
+  return characters.join("");
 }
 
 const ACTIONS = Object.keys(ACTION_LABEL) as EditAction[];
