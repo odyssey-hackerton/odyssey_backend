@@ -5,7 +5,6 @@ import Icon from "./Icon";
 interface Props {
   photos: Photo[];
   text: string;
-  demo: boolean;
   busy: boolean;
   onFiles: (files: File[]) => void;
   onRemove: (index: number) => void;
@@ -17,7 +16,6 @@ interface Props {
 export default function InputPanel({
   photos,
   text,
-  demo,
   busy,
   onFiles,
   onRemove,
@@ -143,16 +141,15 @@ export default function InputPanel({
             disabled={busy}
             onClick={onSample}
           >
-            데모 예시 사진 사용하기
+            예시 사진 사용하기
             <Icon name="arrow" size={16} />
           </button>
         </div>
         <div className="privacy-note">
           <Icon name="lock" size={18} />
           <p>
-            {demo
-              ? "화면 데모에서는 사진과 글을 서버에 보내지 않아요. 새로고침하면 작업이 사라져요."
-              : "사진마다 따로 분석하고, 글은 첫 번째 사진과 함께 분석해요. 서버 원본은 분석 직후 지우고, 편집할 때 이 화면의 사진을 다시 보내요. 새로고침하면 사진을 다시 선택해야 해요."}
+            사진과 글은 이 브라우저 안에서만 처리하고 서버로 보내지 않아요. 새로고침하면 작업이
+            사라져요.
           </p>
         </div>
       </aside>

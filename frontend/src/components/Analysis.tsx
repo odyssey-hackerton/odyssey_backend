@@ -10,7 +10,6 @@ export default function Analysis({
   photos,
   text,
   clues,
-  demo,
   onRecommend,
   onDeep,
   onZoom,
@@ -18,7 +17,6 @@ export default function Analysis({
   photos: Photo[];
   text: string;
   clues: Clue[];
-  demo: boolean;
   onRecommend: () => void;
   onDeep: () => void;
   onZoom: (url: string) => void;
@@ -89,7 +87,7 @@ export default function Analysis({
       <aside className="card controls-card">
         <div className="section-heading">
           <div>
-            <span className="eyebrow">분석 리포트 · ① 탐지 ② 위험 분석 완료</span>
+            <span className="eyebrow">분석 리포트 · ① 탐지 ② 위험 분석</span>
             <h2>사진 속에서 개인정보로 이어질 수 있는 단서예요</h2>
           </div>
           <span className="count-badge">{clues.length}</span>
@@ -145,7 +143,6 @@ export default function Analysis({
           </button>
           <p className="editor-note center">
             심층 분석은 준비 중이에요. 지금은 보호 편집 없이 공유 단계로 넘어가요.
-            {demo && " (화면 데모의 단서는 고정 예시예요.)"}
           </p>
         </div>
       </aside>

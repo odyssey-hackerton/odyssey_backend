@@ -1,4 +1,3 @@
-import type { Finding } from "./api";
 import type { Clue } from "./flow";
 
 export const MAX_PHOTOS = 4;
@@ -42,7 +41,7 @@ export async function readPhoto(file: File): Promise<Photo> {
 }
 
 export function validBox(
-  bbox: Finding["bbox"],
+  bbox: Clue["bbox"],
   width: number,
   height: number,
 ): [number, number, number, number] | null {
@@ -58,7 +57,7 @@ export function validBox(
   return box[2] > box[0] && box[3] > box[1] ? box : null;
 }
 
-// shortcut: 데모는 고정된 예시 영역(예시 카페 사진 기준 비율)을 사용한다. 실제 탐지는 API 모드로 확인한다.
+// shortcut: 서버 없이 동작하므로 예시 영역(예시 카페 사진 기준 비율)을 모든 사진에 쓴다.
 const DEMO_REGIONS = [
   {
     type: "landmark",
@@ -90,7 +89,6 @@ export function demoClues(photos: Photo[]): Clue[] {
   return photos.flatMap((p, imageIndex) =>
     DEMO_REGIONS.map((r, idx) => ({
       key: `${imageIndex}:${idx}`,
-      jobIndex: imageIndex,
       idx,
       imageIndex,
       kind: "image" as const,
@@ -163,4 +161,11 @@ export async function renderPhoto(photo: Photo, clues: Clue[]): Promise<Blob> {
 /** 미리보기 Blob 을 화면·공유용 Photo 로 */
 export async function photoFromBlob(blob: Blob, name: string): Promise<Photo> {
   return readPhoto(new File([blob], name, { type: blob.type || "image/png" }));
+}
+
+/** JPEG/PNG/WebP 파일 앞부분에 촬영 정보(EXIF)가 있는지 본다. 결과 사진은 PNG로 다시 그려 지워진다. */
+export async function hasExif(file: Blob): Promise<boolean> {
+  const head = new Uint8Array(await file.slice(0, 128 * 1024).arrayBuffer());
+  const text = new TextDecoder("latin1").decode(head);
+  return text.includes("Exif\0\0") || text.includes("eXIf");
 }

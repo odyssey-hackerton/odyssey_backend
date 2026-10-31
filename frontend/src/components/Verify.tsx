@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { matchKept, regionLetters, type Clue } from "../flow";
+import { regionLetters, type Clue } from "../flow";
 import type { Photo } from "../media";
 import { Filmstrip } from "./Analysis";
 import Icon from "./Icon";
@@ -19,10 +19,8 @@ export default function Verify({
   outputText,
   clues,
   applyText,
-  remaining,
   riskBefore,
   riskAfter,
-  demo,
   onMore,
   onContinue,
 }: {
@@ -32,20 +30,13 @@ export default function Verify({
   outputText: string;
   clues: Clue[];
   applyText: boolean;
-  remaining: Clue[];
   riskBefore: number | null;
   riskAfter: number | null;
-  demo: boolean;
   onMore: () => void;
   onContinue: () => void;
 }) {
   const [index, setIndex] = useState(0);
   const textClues = clues.filter((c) => c.kind === "text");
-
-  // 그대로 둔 영역이 재검증에서 다시 찾아지면 한 줄로 합친다.
-  const kept = clues.filter((c) => c.action === "skip" || (c.kind === "text" && !applyText));
-  const matched = matchKept(kept, remaining);
-  const seen = new Set([...matched.values()].map((c) => c.key));
 
   const rows: Row[] = [];
   before.forEach((_, imageIndex) => {
@@ -59,9 +50,7 @@ export default function Verify({
               key: c.key,
               ok: false,
               title: `${prefix}${c.title} 그대로 둠`,
-              detail: `${letter} 영역은 직접 그대로 두기로 했어요.${
-                matched.has(c.key) ? " 재검증에서도 이 단서가 보여요." : ""
-              } 공유 후에도 보여요.`,
+              detail: `${letter} 영역은 직접 그대로 두기로 했어요. 공유 후에도 보여요.`,
             }
           : {
               key: c.key,
@@ -95,14 +84,6 @@ export default function Verify({
             detail: "글은 고치지 않기로 했어요. 찾은 단서가 글에 그대로 있어요.",
           },
     );
-  for (const c of remaining.filter((r) => !seen.has(r.key)))
-    rows.push({
-      key: `left-${c.key}`,
-      ok: false,
-      title: `${c.imageIndex != null && before.length > 1 ? `사진 ${c.imageIndex + 1} · ` : ""}${c.title} 남아 있어요`,
-      detail: `재검증에서 다시 찾았어요. ${c.description}`,
-    });
-
   const warnings = rows.filter((r) => !r.ok).length;
   const pct = (v: number | null) => (v == null ? null : Math.round(v * 100));
   const b = pct(riskBefore);
@@ -181,9 +162,8 @@ export default function Verify({
       <div className="residual-note">
         <Icon name="info" size={19} />
         <p>
-          {demo
-            ? "화면 데모의 재검증은 선택 결과를 그대로 보여 줘요. 실제 재검증은 실제 API 모드에서 확인하세요."
-            : "자동 분석이 찾지 못한 정보가 남아 있을 수 있어요. 공유 전에 결과 사진과 글을 직접 확인해 주세요."}
+          자동으로 찾지 못한 정보가 남아 있을 수 있어요. 공유 전에 결과 사진과 글을 직접 확인해
+          주세요.
         </p>
       </div>
       <div className="bottom-actions">
