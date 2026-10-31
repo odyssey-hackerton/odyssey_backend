@@ -19,6 +19,8 @@ services:
   web:
     image: ${DOCKERHUB_USER}/odyssey-web:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     ports:
       - "${HTTP_PORT:-80}:80"
     depends_on:
@@ -27,6 +29,8 @@ services:
 
   api:
     <<: *app
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     command: ["api"]
     depends_on:
       postgres:

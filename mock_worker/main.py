@@ -18,6 +18,7 @@ import socket
 from datetime import UTC, datetime
 
 from PIL import Image, ImageFilter
+from pydantic import ValidationError
 from redis.asyncio import Redis
 
 from app.core.config import get_settings
@@ -69,14 +70,16 @@ async def process(redis: Redis, storage: Storage, msg: JobMessage) -> ResultMess
     await asyncio.sleep(STEP_SECONDS)
 
     if random.random() < FAIL_RATE:
-        return ResultMessage(job_id=msg.job_id, status="FAILED", error="mock failure")
+        return ResultMessage(
+            job_id=msg.job_id, execution_id=msg.execution_id, status="FAILED", error="mock failure"
+        )
 
     # image_text 는 이미지와 글을 모두 처리해서 결과 두 개를 함께 보낸다.
     result_object_key = None
     findings: list[dict] = []
     if msg.input_type in ("image", "image_text"):
         original = await storage.get(msg.object_key)
-        result_object_key = result_key(job_id, "jpg")
+        result_object_key = result_key(f"{job_id}/{msg.execution_id}", "jpg")
         blurred = await asyncio.to_thread(blur_image, original)
         await storage.put(result_object_key, blurred, "image/jpeg")
         findings += [
@@ -97,6 +100,7 @@ async def process(redis: Redis, storage: Storage, msg: JobMessage) -> ResultMess
 
     return ResultMessage(
         job_id=msg.job_id,
+        execution_id=msg.execution_id,
         status="DONE",
         risk_detected=bool(findings),
         risk_before=0.82 if findings else 0.05,
@@ -126,11 +130,23 @@ async def main() -> None:
             for msg_id, fields in entries:
                 try:
                     msg = JobMessage.model_validate_json(fields["payload"])
+                except ValidationError:
+                    logger.error("invalid mock job message %s dropped", msg_id)
+                    await redis.xack(settings.jobs_stream, WORKER_GROUP, msg_id)
+                    continue
+                try:
                     result = await process(redis, storage, msg)
                 except Exception as e:
-                    logger.exception("mock job failed")
-                    job_id = JobMessage.model_validate_json(fields["payload"]).job_id
-                    result = ResultMessage(job_id=job_id, status="FAILED", error=str(e))
+                    logger.warning("mock job failed (%s)", type(e).__name__)
+                    job_id = msg.job_id
+                    result = ResultMessage(
+                        job_id=job_id,
+                        execution_id=msg.execution_id,
+                        status="FAILED",
+                        error=type(e).__name__,
+                    )
+                if msg.object_key:
+                    await storage.delete(msg.object_key)
                 await redis.xadd(
                     settings.results_stream,
                     {"payload": result.model_dump_json()},
