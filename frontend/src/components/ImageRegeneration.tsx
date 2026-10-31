@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { getGenerationStatus, regenerateBackground } from "../api";
 import type { Box } from "../flow";
+import Icon from "./Icon";
 
-export default function ImageRegeneration({ prepareImage, bbox, attempts, disabled, demo, onAttempt, onGenerated, onBusy }: {
+export default function ImageRegeneration({ prepareImage, bbox, letter, attempts, disabled, demo, onAttempt, onGenerated, onBusy }: {
   prepareImage: () => Promise<Blob>;
+  letter: string;
   bbox: Box;
   attempts: number;
   disabled: boolean;
@@ -43,15 +45,23 @@ export default function ImageRegeneration({ prepareImage, bbox, attempts, disabl
 
   return (
     <section className="generation-panel" aria-label="이미지 재생성">
-      <strong>이미지 재생성</strong>
-      <p>보호 처리를 마친 사진으로 선택 영역의 배경을 새로 만들어요.</p>
-      <button className="button primary" disabled={demo || disabled || !enabled || attempts >= 3 || generating}
-        onClick={() => void generate()}>
-        {generating ? "생성 중…" : attempts ? "다시 생성" : "이미지 생성"} · {attempts} / 3
-      </button>
+      <div className="generation-head">
+        <div>
+          <strong>이미지 재생성{letter && ` · ${letter} 영역`}</strong>
+          <p>AI가 선택 영역의 배경을 새로 그려 추천해요.</p>
+        </div>
+        <button className="button primary" disabled={demo || disabled || !enabled || attempts >= 3 || generating}
+          onClick={() => void generate()}>
+          {generating ? "생성 중…" : attempts ? "다시 생성" : "이미지 생성"} · {attempts} / 3
+        </button>
+      </div>
+      <p className="generation-note">
+        <Icon name="info" size={15} />
+        추천은 처음 AI가 보호 처리한 사진으로 만들어요. 직접 바꾼 편집(보호 방법, 영역 크기, 삭제)은 추천에 들어가지 않아요.
+      </p>
       <small>{demo ? "데모에서는 이미지 재생성을 사용할 수 없어요." : !enabled
         ? "현재 이미지 생성에 연결할 수 없어요."
-        : "사진별 최초 1회 + 재생성 2회 · 실패한 호출도 포함돼요."}</small>
+        : "사진마다 최대 3번 (처음 1번 + 다시 생성 2번) · 실패한 시도도 횟수에 들어가요."}</small>
       {error && <p className="editor-warning" role="alert">{error}</p>}
     </section>
   );

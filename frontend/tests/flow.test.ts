@@ -147,3 +147,24 @@ test("dragging any corner preserves center and ratio, including image boundaries
     assert.ok(b[3] - b[1] >= 12);
   }
 });
+
+test("image regeneration uses the first AI-protected photo, not the user's edits", async () => {
+  const { generationBase } = await import("../src/flow.ts");
+  const base = { position: 0, idx: 0, imageIndex: 0, kind: "image" as const, type: "x", title: "x", description: "x" };
+  const clues = [
+    { ...base, key: "0:0", recommended: "mask" as const, action: "blur" as const,
+      originalBox: [10, 10, 50, 50] as [number, number, number, number], bbox: [0, 0, 80, 80] as [number, number, number, number] },
+    { ...base, key: "0:1", idx: 1, recommended: "blur" as const, action: "skip" as const, deleted: true,
+      bbox: [60, 60, 90, 90] as [number, number, number, number] },
+    { ...base, key: "0:2", idx: 2, category: "location" as const, recommended: "mask" as const, action: "regenerate" as const,
+      generatedUrl: "blob:old", bbox: [100, 10, 200, 90] as [number, number, number, number] },
+    { ...base, key: "1:0", position: 1, imageIndex: 1, recommended: "mask" as const, action: "mask" as const,
+      bbox: [0, 0, 5, 5] as [number, number, number, number] },
+  ];
+  const sent = generationBase(clues, 0, "0:2");
+  assert.deepEqual(sent.map((c) => c.key), ["0:0", "0:1", "0:2"], "only this photo, deleted regions restored");
+  assert.deepEqual(sent.map((c) => c.action), ["mask", "blur", "mask"], "recommended actions; the target stays covered");
+  assert.deepEqual(sent[0].bbox, [10, 10, 50, 50], "resized box goes back to the AI box");
+  assert.ok(sent.every((c) => !c.deleted && !c.generatedUrl && !c.maskBox));
+  assert.equal(clues[0].action, "blur", "the editor state itself is untouched");
+});

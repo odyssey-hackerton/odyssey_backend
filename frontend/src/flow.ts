@@ -54,6 +54,26 @@ export interface Clue {
   generatedUrl?: string;
 }
 
+/**
+ * 이미지 재생성(Gemini)에 보낼 사진의 영역 목록.
+ * 사용자가 바꾼 편집(보호 방법, 영역 크기, 삭제, 부분마스킹, 이전 생성 결과)은 넣지 않고
+ * AI가 처음 추천한 보호 상태로 되돌려 그린다. 생성할 영역(targetKey)은 가린 채로 보낸다.
+ */
+export function generationBase(clues: Clue[], imageIndex: number, targetKey: string): Clue[] {
+  return clues
+    .filter((c) => c.kind === "image" && c.imageIndex === imageIndex)
+    .map((c) => ({
+      ...c,
+      bbox: c.originalBox ?? c.bbox,
+      action: c.key === targetKey || c.recommended === "regenerate" || c.recommended === "partialMask"
+        ? "mask"
+        : c.recommended,
+      deleted: false,
+      maskBox: undefined,
+      generatedUrl: undefined,
+    }));
+}
+
 /** 사진 한 장 안에서 영역 단서에 A, B, C … 를 붙인다. */
 export function regionLetters(clues: Clue[], imageIndex: number): Map<string, string> {
   const letters = new Map<string, string>();

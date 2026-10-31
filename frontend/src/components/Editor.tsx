@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ACTION_LABEL, ALLOWED_ACTIONS, CATEGORY_LABEL, regionLetters, type Clue, type EditAction } from "../flow";
+import { ACTION_LABEL, ALLOWED_ACTIONS, CATEGORY_LABEL, generationBase, regionLetters, type Clue, type EditAction } from "../flow";
 import { renderPhoto, type Photo } from "../media";
 import { Filmstrip } from "./Analysis";
 import Icon, { type IconName } from "./Icon";
@@ -111,6 +111,18 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
               onClick={() => preview && onZoom(preview)}><Icon name="search" /></button>
           </> : <p className="text-preview">사진 없이 글만 올렸어요. 글은 적용할 때 확인해요.</p>}
         </div>
+        {photo && chosen?.category === "location" && chosen.bbox && (
+          <ImageRegeneration key={`${photoIndex}:${chosen.key}`} demo={demo}
+            letter={letters.get(chosen.key) ?? ""}
+            bbox={chosen.bbox} attempts={attempts} disabled={busy || rendering || pendingMask || !!error}
+            prepareImage={() => renderPhoto(photo, generationBase(clues, photoIndex, chosen.key))}
+            onAttempt={() => onGenerationAttempt(photoIndex)}
+            onGenerated={(blob) => {
+              onGenerated(chosen.key, blob);
+              setConfirmed((all) => all.map((v, i) => i === photoIndex ? false : v));
+            }}
+            onBusy={onBusy} />
+        )}
         {photos.length > 1 && <Filmstrip photos={photos} index={photoIndex} done={confirmed} onSelect={openPhoto} />}
       </section>
 
@@ -162,20 +174,6 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
             이 영역은 그대로 두기
           </label>
         </div>}
-
-        {photo && chosen?.category === "location" && chosen.bbox && (
-          <ImageRegeneration key={`${photoIndex}:${chosen.key}`} demo={demo}
-            bbox={chosen.bbox} attempts={attempts} disabled={busy || rendering || pendingMask || !!error}
-            prepareImage={() => renderPhoto(photo, regions.map((c) =>
-              c.key === chosen.key || (c.action === "regenerate" && !c.generatedUrl)
-                ? { ...c, action: "mask" } : c))}
-            onAttempt={() => onGenerationAttempt(photoIndex)}
-            onGenerated={(blob) => {
-              onGenerated(chosen.key, blob);
-              setConfirmed((all) => all.map((v, i) => i === photoIndex ? false : v));
-            }}
-            onBusy={onBusy} />
-        )}
 
         {(fileClues.length > 0 || textClueCount > 0) && <ul className="auto-notes">
           {fileClues.length > 0 && <li><Icon name="check" size={15} />사진 파일 정보(촬영 위치·기기)는 적용할 때 자동으로 지워요.</li>}

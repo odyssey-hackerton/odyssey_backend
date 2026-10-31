@@ -112,13 +112,19 @@ assert.deepEqual(await enabled(), ['가림','블러','모자이크']);
 await click('모자이크');
 await until(`!document.querySelector('.render-badge')`);
 assert.equal(await evaluate(`document.querySelectorAll('.editor input[type=range]').length`), 0);
+// 사용자가 바꾼 편집(A 영역 블러)은 재생성 입력에 들어가지 않는다.
+await evaluate(`document.querySelectorAll('.region-row')[0].click()`);
+await click('블러');
+await until(`!document.querySelector('.render-badge')`);
 await evaluate(`document.querySelectorAll('.region-row')[2].click()`);
 assert.deepEqual(await enabled(), ['가림']);
+assert.equal(await evaluate(`!!document.querySelector('.image-workspace .generation-panel') && !document.querySelector('.controls-card .generation-panel')`), true, 'regeneration sits under the photo');
+assert.ok((await evaluate(`document.querySelector('.generation-panel').textContent`)).includes('추천에 들어가지 않아요'));
 await until(`[...document.querySelectorAll('.generation-panel button')].some(b=>!b.disabled)`);
 for(let i=0;i<3;i++) {
   await evaluate(`{ const button = document.querySelector('.generation-panel button'); button.click(); button.click(); }`);
   await until(`window.__attempts === ${i+1} && !document.querySelector('fieldset').disabled && !document.querySelector('.render-badge')`);
-  assert.deepEqual(await evaluate(`window.__generationPixels`), [[20,33,56,255],[20,33,56,255]], 'generation receives protected text and target pixels');
+  assert.deepEqual(await evaluate(`window.__generationPixels`), [[20,33,56,255],[20,33,56,255]], 'generation receives the first AI-protected pixels, not user edits');
   if (i === 0) {
     assert.equal(await evaluate(`document.querySelector('.control-footer .primary').disabled`), false, 'generation failure does not block ordinary editing');
     await evaluate(`document.querySelector('.undo-button').click()`);
