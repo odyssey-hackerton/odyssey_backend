@@ -72,15 +72,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # AI 워커가 준비되기 전까지 .env 의 COMPOSE_PROFILES=mock 으로 켠다.
-  mock-worker:
-    <<: *app
-    profiles: ["mock"]
-    command: ["mock-worker"]
-    depends_on:
-      redis:
-        condition: service_healthy
-
 volumes:
   pgdata:
   redisdata:
