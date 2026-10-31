@@ -38,7 +38,7 @@ export default function TextReview({
       <div className="text-dialog-head">
         <div>
           <span className="eyebrow">글 확인</span>
-          <h2 id="text-review-title">글도 이렇게 고칠까요?</h2>
+          <h2 id="text-review-title">AI가 고친 글을 적용할까요?</h2>
           <p>
             글에서 단서 {clues.length}개를 찾았어요.{" "}
             {clues.map((c) => c.title).join(", ")} 부분이 문제가 될 수 있어서 이렇게 고치려고
@@ -69,10 +69,10 @@ export default function TextReview({
       </div>
       <div className="text-dialog-actions">
         <button className="button secondary" onClick={() => onDecide(false)}>
-          원래 글 그대로
+          건너뛰기
         </button>
         <button className="button primary" onClick={() => onDecide(true)}>
-          고친 글로 적용
+          적용하기
           <Icon name="arrow" />
         </button>
       </div>

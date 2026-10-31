@@ -138,12 +138,8 @@ export default function Analysis({
             <Icon name="arrow" />
           </button>
           <button className="button ghost full" onClick={onDeep}>
-            <Icon name="spark" size={17} />
-            심층 분석
+            건너뛰기
           </button>
-          <p className="editor-note center">
-            심층 분석은 준비 중이에요. 지금은 보호 편집 없이 공유 단계로 넘어가요.
-          </p>
         </div>
       </aside>
     </div>
@@ -154,11 +150,13 @@ export function Filmstrip({
   photos,
   index,
   counts,
+  done,
   onSelect,
 }: {
   photos: { url: string }[];
   index: number;
   counts?: number[];
+  done?: boolean[];
   onSelect: (i: number) => void;
 }) {
   return (
@@ -167,13 +165,18 @@ export function Filmstrip({
         <button
           key={p.url}
           className={i === index ? "active" : ""}
-          aria-label={`사진 ${i + 1} 보기`}
+          aria-label={`사진 ${i + 1} 보기${done?.[i] ? " (편집 완료)" : ""}`}
           aria-pressed={i === index}
           onClick={() => onSelect(i)}
         >
           <img src={p.url} alt="" />
           <span>{i + 1}</span>
           {!!counts?.[i] && <em className="film-count">{counts[i]}</em>}
+          {done?.[i] && (
+            <em className="film-done" aria-hidden="true">
+              <Icon name="check" size={11} />
+            </em>
+          )}
         </button>
       ))}
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { regionLetters, type Clue, type EditAction } from "../flow";
 import { renderPhoto, type Photo } from "../media";
 import { Filmstrip } from "./Analysis";
@@ -47,6 +47,9 @@ export default function Editor({
   const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<string>();
   const [rendering, setRendering] = useState(false);
+  const top = useRef<HTMLDivElement>(null);
+  // 사진이 여러 장이면 한 장씩 편집을 마쳐야 적용할 수 있다.
+  const [confirmed, setConfirmed] = useState<boolean[]>(() => photos.map(() => false));
   const photo = photos[photoIndex];
   const regions = clues.filter((c) => c.kind === "image" && c.imageIndex === photoIndex);
   const fileClues = clues.filter((c) => c.kind === "file" && c.imageIndex === photoIndex);
@@ -79,15 +82,43 @@ export default function Editor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [photo, regionKey]);
 
+  const many = photos.length > 1;
+  const doneCount = confirmed.filter(Boolean).length;
+  const nextPending = (from: number) => {
+    for (let k = 1; k < photos.length; k++) {
+      const i = (from + k) % photos.length;
+      if (!confirmed[i]) return i;
+    }
+    return -1;
+  };
+  const isLast = !many || nextPending(photoIndex) === -1;
+  function openPhoto(i: number) {
+    setPhotoIndex(i);
+    setSelected(undefined);
+    setPreviewing(false);
+  }
+  function finishPhoto() {
+    if (isLast) {
+      setConfirmed((c) => c.map(() => true));
+      onApply();
+      return;
+    }
+    const next = nextPending(photoIndex);
+    setConfirmed((c) => c.map((v, i) => v || i === photoIndex));
+    openPhoto(next);
+    top.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   const toolOf = (a?: EditAction) => (a === "blur" || a === "mask" ? "cover" : a === "remove" ? "remove" : null);
 
   return (
-    <div className="workspace-grid editor-grid">
+    <div className="workspace-grid editor-grid" ref={top}>
       <section className="card image-workspace">
         <div className="image-toolbar">
           <span>
             <Icon name="image" size={16} />
             {photo ? `사진 ${photoIndex + 1} / ${photos.length}` : "글"}
+            {many && <b className="done-count">편집 완료 {doneCount} / {photos.length}</b>}
           </span>
           <span className={`view-chip ${previewing ? "on" : ""}`}>
             {previewing ? "미리보기 · 보호가 적용된 모습" : "편집 · 영역을 눌러 바꿀 수 있어요"}
@@ -130,14 +161,7 @@ export default function Editor({
           )}
         </div>
         {photos.length > 1 && (
-          <Filmstrip
-            photos={photos}
-            index={photoIndex}
-            onSelect={(i) => {
-              setPhotoIndex(i);
-              setSelected(undefined);
-            }}
-          />
+          <Filmstrip photos={photos} index={photoIndex} done={confirmed} onSelect={openPhoto} />
         )}
       </section>
 
@@ -258,7 +282,8 @@ export default function Editor({
             {textClueCount > 0 && (
               <li>
                 <Icon name="info" size={15} />
-                글에서 찾은 단서 {textClueCount}개는 적용 전에 바뀐 글을 보여 드려요.
+                {many ? "모든 사진 편집이 끝나면" : "편집이 끝나면"} 글에서 찾은 단서 {textClueCount}개를
+                가린 글을 적용할지 물어볼게요.
               </li>
             )}
           </ul>
@@ -273,8 +298,8 @@ export default function Editor({
             <Icon name={previewing ? "edit" : "search"} size={18} />
             {previewing ? "편집으로 돌아가기" : "미리보기"}
           </button>
-          <button className="button primary" onClick={onApply}>
-            적용
+          <button className="button primary" onClick={finishPhoto}>
+            {isLast ? "적용" : `사진 ${photoIndex + 1} 완료 · 다음 사진`}
             <Icon name="arrow" />
           </button>
         </div>
