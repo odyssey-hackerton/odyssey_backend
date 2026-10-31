@@ -5,6 +5,22 @@ export const MAX_BYTES = 10 * 1024 * 1024;
 export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 export type Photo = { file: File; url: string; width: number; height: number };
 
+/** 클릭 핸들러에서 준비된 파일을 바로 전달해야 Safari의 사용자 활성화가 유지된다. */
+export async function sharePhotos(files: File[], text: string): Promise<void> {
+  if (files.length > MAX_PHOTOS)
+    throw new Error(`사진은 최대 ${MAX_PHOTOS}장까지 공유할 수 있어요.`);
+  if (!files.length && !text.trim()) throw new Error("공유할 사진이나 본문이 없어요.");
+  // files만 검사해야 파일 공유를 모르는 브라우저가 text만 보고 통과하지 않는다.
+  if (!navigator.share || (files.length && !navigator.canShare?.({ files })))
+    throw new Error(
+      "이 환경에서는 공유를 지원하지 않아요. 사진을 다운로드하고 본문을 복사하거나, HTTPS로 연결한 iPhone Safari에서 시도해 주세요.",
+    );
+  await navigator.share({
+    ...(text ? { text } : {}),
+    ...(files.length ? { files } : {}),
+  });
+}
+
 export function validateFiles(
   files: Pick<File, "type" | "size">[],
   currentCount: number,

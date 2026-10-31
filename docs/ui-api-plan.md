@@ -91,9 +91,10 @@ README 일부에 transform/AWAITING_USER 설명이 누락되어 있으므로 코
 `../x-api-test/XShareWeb/README.md` 기록: 2026-10-31 iPhone iOS 27.2 Safari에서 텍스트, PNG 1/3/4장+본문, JPEG 3장+본문, PNG 1장 단독 전달 성공. 5장은 AbortError. Android/PC는 미확인.
 
 - 신규 share API, X OAuth, 직접 게시 API는 필요 없다.
-- result의 presigned URL → 프론트 fetch → Blob/File[] → navigator.share({ files, text }).
+- 현재 UI: 브라우저에서 완성한 File[] → navigator.share({ files, text }). 사진 순서와 처리된 본문을 함께 전달한다. 기존 서버 변환 클라이언트는 게시물 result의 `/api/jobs/{id}/image`를 fetch해 File[]을 준비한다.
 - 사진 파일은 버튼 클릭 전에 준비한다. 공유 시 사용자 활성화가 필요하다.
-- HTTPS와 S3 CORS를 확인해야 한다. 현재 테스트의 로컬 가짜 이미지 전달과 실제 S3 결과 전달은 별도 통합 검증 대상이다.
+- 같은 서버의 이미지 API를 사용하므로 S3 CORS 설정은 필요 없다. 공유 시트에는 HTTPS가 필요하며, 테스트의 로컬 가짜 이미지 전달과 실제 S3 결과 전달은 별도 통합 검증 대상이다.
+- 결과 레코드·사진 키 누락은 result API가 404로 응답한다. 이미지 API는 S3 파일 누락을 404, 저장소 연결·권한 오류를 503으로 응답한다. 파일 공유 지원은 `canShare({ files })`로 확인하고, 미지원 시 다운로드·본문 복사를 안내한다.
 - 공유 반환은 실제 X 게시 완료를 보장하지 않는다. 성공 기준은 X 글쓰기 화면의 사진·본문 확인이다.
 - Instagram/YouTube 직접 연동은 현재 구현 범위가 아니다.
 

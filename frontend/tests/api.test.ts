@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createPost, transformPost, waitForPost } from "../src/api.ts";
+import { createPost, fetchImage, transformPost, waitForPost } from "../src/api.ts";
 
 test("photos and caption go up as one post; transform resends originals in order", async () => {
   const original = globalThis.fetch;
@@ -84,4 +84,26 @@ test("background generation sends edited pixels and geometry, and surfaces provi
     assert.deepEqual(await getGenerationStatus(), { enabled: true });
     assert.equal(requests, 2);
   } finally { globalThis.fetch = original; }
+});
+
+test("share files contain the downloaded result bytes and matching filename, not a result URL", async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const [type, ext] of [["image/png", "png"], ["image/jpeg", "jpg"], ["image/webp", "webp"]]) {
+      globalThis.fetch = async (url) => {
+        assert.equal(url, "/api/jobs/j1/image");
+        return new Response("processed image", { headers: { "Content-Type": type } });
+      };
+      const file = await fetchImage("/api/jobs/j1/image", "odyssey-1");
+      assert.equal(file.name, `odyssey-1.${ext}`);
+      assert.equal(file.type, type);
+      assert.equal(await file.text(), "processed image");
+    }
+    globalThis.fetch = async () => new Response("missing", { status: 404 });
+    await assert.rejects(fetchImage("/api/jobs/j1/image", "odyssey-1"), /가져오지/);
+    globalThis.fetch = async () => new Response("<html>error</html>", { headers: { "Content-Type": "text/html" } });
+    await assert.rejects(fetchImage("/api/jobs/j1/image", "odyssey-1"), /사진 파일/);
+  } finally {
+    globalThis.fetch = original;
+  }
 });
