@@ -3,7 +3,28 @@
 
 import type { Choice, Finding, PostReport } from "./api";
 
-export type EditAction = "blur" | "mask" | "remove" | "skip";
+export type EditAction = "blur" | "mask" | "remove" | "skip" | "mosaic" | "partialMask" | "regenerate";
+export type RegionCategory = "text" | "object" | "location";
+export type Box = [number, number, number, number];
+export const CATEGORY_LABEL: Record<RegionCategory, string> = {
+  text: "텍스트", object: "객체", location: "간접위치",
+};
+export const ALLOWED_ACTIONS: Record<RegionCategory, EditAction[]> = {
+  text: ["mask", "blur", "partialMask", "remove"],
+  object: ["mask", "blur", "mosaic"],
+  location: ["mask"],
+};
+export const ACTION_LABEL: Record<EditAction, string> = {
+  mask: "가림", blur: "블러", mosaic: "모자이크", partialMask: "부분마스킹",
+  remove: "텍스트제거", regenerate: "이미지재생성", skip: "그대로 두기",
+};
+
+export function categoryOf(f: Finding): RegionCategory {
+  if (f.category === "text" || f.category === "object" || f.category === "location") return f.category;
+  if (f.source === "ocr" || /text|name|phone|email|address|rrn|plate|tracking|sign|store/i.test(f.type)) return "text";
+  if (f.source === "agent2" || /landmark|reflection|location|architecture|building|landscape|window/i.test(f.type)) return "location";
+  return "object";
+}
 export type Risk = "high" | "medium" | "low";
 /** image: 사진 속 영역, text: 글 속 문구, file: 사진 파일 정보(EXIF 등) */
 export type ClueKind = "image" | "text" | "file";
@@ -25,6 +46,12 @@ export interface Clue {
   /** AI(③)가 추천한 처리. 되돌리기에 쓴다. */
   recommended: EditAction;
   action: EditAction;
+  category?: RegionCategory;
+  originalBox?: Box;
+  deleted?: boolean;
+  /** 사용자가 지정한 부분마스킹 범위, bbox 안의 0~1 상대 좌표. */
+  maskBox?: Box;
+  generatedUrl?: string;
 }
 
 /** 사진 한 장 안에서 영역 단서에 A, B, C … 를 붙인다. */
@@ -65,7 +92,7 @@ export function maskText(text: string, clues: Clue[]): string {
   return out;
 }
 
-const ACTIONS: EditAction[] = ["blur", "mask", "remove", "skip"];
+const ACTIONS = Object.keys(ACTION_LABEL) as EditAction[];
 const isAction = (v: unknown): v is EditAction =>
   typeof v === "string" && (ACTIONS as string[]).includes(v);
 const isRisk = (v: unknown): v is Risk => v === "high" || v === "medium" || v === "low";
@@ -98,8 +125,10 @@ export function cluesFromFindings(
         : f.source === "exif" || !Array.isArray(f.bbox)
           ? "file"
           : "image";
-    const recommended: EditAction =
+    const category = categoryOf(f);
+    let recommended: EditAction =
       kind === "file" ? "remove" : isAction(f.action) && f.action !== "skip" ? f.action : "mask";
+    if (kind === "image" && !ALLOWED_ACTIONS[category].includes(recommended)) recommended = "mask";
     return {
       key: `${position}:${idx}`,
       position,
@@ -117,8 +146,28 @@ export function cluesFromFindings(
       spans,
       recommended,
       action: recommended,
+      category,
+      originalBox: kind === "image" ? (f.bbox as Box)?.slice() as Box : undefined,
     };
   });
+}
+
+/** 원래 박스의 중심과 비율을 유지하고 사진 경계에서 확대를 멈춘다. */
+export function scaleBox(box: Box, scale: number, width: number, height: number): Box {
+  const w = box[2] - box[0], h = box[3] - box[1];
+  const cx = (box[0] + box[2]) / 2, cy = (box[1] + box[3]) / 2;
+  if (w <= 0 || h <= 0) return box;
+  const max = Math.min(2 * cx / w, 2 * (width - cx) / w, 2 * cy / h, 2 * (height - cy) / h);
+  const factor = Math.min(max, Math.max(Math.min(1, 12 / Math.min(w, h)), Number.isFinite(scale) ? scale : 1));
+  return [cx - w * factor / 2, cy - h * factor / 2, cx + w * factor / 2, cy + h * factor / 2];
+}
+
+/** 모서리 이동을 중심 기준 확대/축소로 투영한다. */
+export function resizeBox(box: Box, dx: number, dy: number, width: number, height: number, corner: number): Box {
+  const w = box[2] - box[0], h = box[3] - box[1];
+  const sx = corner === 0 || corner === 3 ? -1 : 1;
+  const sy = corner < 2 ? -1 : 1;
+  return scaleBox(box, 1 + 2 * (sx * dx * w + sy * dy * h) / (w * w + h * h), width, height);
 }
 
 /** 게시물 리포트 전체를 단서로. 사진이 있는 항목은 position 이 곧 사진 번호다. */

@@ -2398,3 +2398,15 @@ h1:focus {
     scroll-behavior: auto !important;
   }
 }
+
+/* 기존 2열 편집 화면의 추가 설정. */
+.editor-fieldset { border: 0; padding: 0; min-width: 0; margin-inline: 0; }
+.editor-grid > * { min-width: 0; }
+.editor-grid .edit-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.editor-grid .edit-actions button:disabled { opacity: .4; cursor: not-allowed; }
+.photo-view .resize-handle { touch-action: none; }
+.photo-view [role="button"]:focus-visible { outline: none; stroke: var(--blue); stroke-width: 3; }
+.generation-panel { padding: 14px; background: #f0f6ff; border-radius: 10px; margin-top: 16px; font-size: 12px; }
+.generation-panel p { margin: 0 0 10px; }
+.generation-panel small { display: block; color: #657792; line-height: 1.7; margin-top: 9px; }
+.editor-warning { margin: 12px 0; padding: 12px; border-radius: 9px; background: #fff3dc; color: #785015; font-size: 12px; line-height: 1.7; }

@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # 업로드 제한
     max_upload_bytes: int = 10 * 1024 * 1024
     max_text_chars: int = 5000
+
+    # 서버 전용 이미지 생성. 키가 없으면 편집 UI의 생성 버튼을 비활성화한다.
+    gemini_api_key: SecretStr | None = None
+    gemini_image_model: str = Field(default="gemini-nano-banana-2.1", pattern=r"^[a-zA-Z0-9._-]+$")
 
     # 큐 (API-워커 계약 v1)
     jobs_stream: str = "jobs"

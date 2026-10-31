@@ -102,3 +102,48 @@ test("a region kept as-is and found again by re-verification is reported once", 
   assert.equal(matchKept([kept], [again]).get(kept.key), again);
   assert.equal(matchKept([kept], [elsewhere]).size, 0);
 });
+
+test("image categories enforce their own tool sets and normalize unsupported recommendations", async () => {
+  const { categoryOf, ALLOWED_ACTIONS, cluesFromFindings } = await import("../src/flow.ts");
+  assert.equal(categoryOf({ type: "address", source: "vlm" }), "text");
+  assert.equal(categoryOf({ type: "store", source: "vlm" }), "text");
+  assert.equal(categoryOf({ type: "unknown", source: "ocr" }), "text");
+  assert.equal(categoryOf({ type: "face" }), "object");
+  assert.equal(categoryOf({ type: "window_reflection" }), "location");
+  assert.equal(categoryOf({ type: "architecture", source: "agent2" }), "location");
+  assert.equal(categoryOf({ type: "face", category: "location" }), "location");
+  assert.deepEqual(ALLOWED_ACTIONS.text, ["mask", "blur", "partialMask", "remove"]);
+  assert.deepEqual(ALLOWED_ACTIONS.object, ["mask", "blur", "mosaic"]);
+  assert.deepEqual(ALLOWED_ACTIONS.location, ["mask"]);
+  const [clue] = cluesFromFindings([{ type: "reflection", bbox: [0, 0, 10, 10], action: "blur" }], 0, 0);
+  assert.equal(clue.action, "mask");
+  assert.notEqual(clue.bbox, clue.originalBox);
+});
+
+test("scaling keeps the original center and ratio, clamps to photo bounds and restores exactly", async () => {
+  const { scaleBox } = await import("../src/flow.ts");
+  const box: [number, number, number, number] = [20, 20, 60, 40];
+  for (const scale of [-100, 0.25, 0.5, 1, 1.5, 2, 100, NaN]) {
+    const b = scaleBox(box, scale, 100, 80);
+    assert.ok(b[0] >= 0 && b[1] >= 0 && b[2] <= 100 && b[3] <= 80);
+    assert.ok(Math.abs((b[2] - b[0]) / (b[3] - b[1]) - 2) < 1e-9);
+    assert.equal((b[0] + b[2]) / 2, 40);
+    assert.equal((b[1] + b[3]) / 2, 30);
+  }
+  assert.deepEqual(scaleBox(box, 1, 100, 80), box);
+  assert.deepEqual(scaleBox(box, 0.75, 100, 80), [25, 22.5, 55, 37.5]);
+  assert.deepEqual(scaleBox([0, 0, 20, 10], 2, 100, 80), [0, 0, 20, 10]);
+});
+
+test("dragging any corner preserves center and ratio, including image boundaries", async () => {
+  const { resizeBox } = await import("../src/flow.ts");
+  const box: [number, number, number, number] = [20, 20, 60, 40];
+  for (const corner of [0, 1, 2, 3]) for (const delta of [-1000, -10, 0, 10, 1000]) {
+    const b = resizeBox(box, delta, delta, 100, 80, corner);
+    assert.equal((b[0] + b[2]) / 2, 40);
+    assert.equal((b[1] + b[3]) / 2, 30);
+    assert.ok(Math.abs((b[2] - b[0]) / (b[3] - b[1]) - 2) < 1e-9);
+    assert.ok(b[0] >= 0 && b[1] >= 0 && b[2] <= 100 && b[3] <= 80);
+    assert.ok(b[3] - b[1] >= 12);
+  }
+});

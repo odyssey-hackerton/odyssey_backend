@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, jobs, posts
+from app.api import health, jobs, posts, regeneration
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.db.session import create_engine, create_session_factory
@@ -104,4 +104,5 @@ app.include_router(health.router)
 # Nginx 뒤에서도 확인할 수 있게 /api/health 로도 연다.
 app.include_router(health.router, prefix="/api", include_in_schema=False)
 app.include_router(posts.router)
+app.include_router(regeneration.router)
 app.include_router(jobs.router)

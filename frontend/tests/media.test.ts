@@ -19,6 +19,16 @@ test("invalid and out-of-bounds detection rectangles cannot reach the editor", (
   assert.equal(validBox(undefined, 100, 100), null);
 });
 
+test("blur spreads pixels smoothly without changing opacity, including single-pixel areas", async () => {
+  const { blurPixels } = await import("../src/media.ts");
+  const data = new Uint8ClampedArray([0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255]);
+  blurPixels(data, 3, 1, 1);
+  assert.deepEqual([...data], [85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255]);
+  const single = new Uint8ClampedArray([20, 40, 60, 255]);
+  blurPixels(single, 1, 1, 80);
+  assert.deepEqual([...single], [20, 40, 60, 255]);
+});
+
 test("sharing immediately passes the prepared photos in order with the processed caption", async () => {
   const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   const calls: ShareData[] = [];

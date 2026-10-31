@@ -8,12 +8,14 @@ export default function ResultView({
   notice,
   onRestart,
   onBack,
+  backLabel,
 }: {
   photos: Photo[];
   text: string;
   notice?: string;
   onRestart: () => void;
   onBack: () => void;
+  backLabel?: string;
 }) {
   const [index, setIndex] = useState(0);
   const [message, setMessage] = useState("");
@@ -120,7 +122,7 @@ export default function ResultView({
       <div className="share-bottom">
         <button className="text-button" onClick={onBack}>
           <Icon name="back" size={16} />
-          {notice ? "분석 결과" : "재검증 결과"}
+          {backLabel ?? (notice ? "분석 결과" : "재검증 결과")}
         </button>
         <button className="text-button" onClick={onRestart}>
           새 게시물 보호하기

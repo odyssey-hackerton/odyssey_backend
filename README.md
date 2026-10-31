@@ -320,10 +320,11 @@ docker compose --env-file .env --env-file litellm/.env stop litellm litellm-db
 | `GET` | `/api/posts/{id}/result` | 처리된 글과 항목별 결과 사진 주소(`/api/jobs/{job_id}/image`) |
 | `GET` | `/api/jobs/{id}/image` | 결과 사진을 서버를 거쳐 내려줌. 같은 주소라 S3 CORS 설정 없이 공유·다운로드 가능 |
 
-공유는 `x-api-test`에서 확인한 Web Share 방식입니다. 모든 항목이 `DONE`이면 프론트가
-`/api/posts/{id}/result`의 처리된 본문과 사진 파일을 미리 준비하고, 버튼 클릭 시
-`navigator.share({ files, text })`로 전달합니다. 사용자가 공유 시트에서 X를 고르고 글쓰기
-화면에서 최종 게시합니다. X API 키나 OAuth 설정은 필요 없습니다.
+공유는 `x-api-test`에서 확인한 Web Share 방식입니다. 현재 프론트는 브라우저에서 완성한
+사진 파일과 본문을 미리 준비하고, 버튼 클릭 시 `navigator.share({ files, text })`로 전달합니다.
+사용자가 공유 시트에서 X를 고르고 글쓰기 화면에서 최종 게시합니다.
+X API 키나 OAuth 설정은 필요 없습니다. 기존 서버 변환 클라이언트는 모든 항목이
+`DONE`이면 `/api/posts/{id}/result`로 결과를 받습니다.
 
 결과가 누락되면 `/result`는 `404`로 응답해 일부 사진만 공유되는 것을 막습니다.
 사진 다운로드는 S3 파일이 없으면 `404`, 저장소 연결·권한 오류면 `503`입니다.
@@ -403,3 +404,12 @@ v1 작업/워커와 혼용하지 않는다. 이전 작업에는 파일 해시가
 Compose는 API의 임시 업로드 파일과 Nginx 업로드 버퍼를 `/tmp` tmpfs에 둔다.
 Compose 밖에서 실행할 때는 별도 메모리 임시 디렉터리가 필요하다.
 현재 Gemini 호출은 외부 서비스 전송이므로 S3 삭제가 외부 서비스 삭제를 보장하지 않는다.
+
+
+### 브라우저 보호 편집과 Gemini 배경 재생성
+
+일반 보호 편집은 프론트 Canvas에서 실행하고(텍스트제거는 필요할 때 로드하는 OpenCV.js 인페인팅),, 최종 PNG를 기존 게시물 분석 API로 재검증합니다. 기존 transform API/워커 계약은 유지됩니다. UI 상세와 동작 검증은 [frontend/README.md](frontend/README.md)를 참고하세요.
+
+배경 재생성은 게시물·분석 작업에서 분리한 API `GET/POST /api/images/regenerate`를 사용합니다. GET은 키 설정 여부만 반환하고 POST는 전처리된 사진(`file`)과 영역 좌표(`bbox`)를 받아 Gemini를 호출합니다. 게시물 ID·DB 조회·큐 작업은 필요 없습니다. 전처리는 호출자 책임이며, 현재 화면은 AI 탐지 결과에 따른 브라우저 보호 처리본을 전달합니다. API 서버 `.env`의 `GEMINI_API_KEY`, `GEMINI_IMAGE_MODEL` 설정이 필요합니다. DB 스키마 변경·마이그레이션·Redis 카운터는 없습니다. 최초 1회와 재생성 2회 제한은 사진별 프론트 React 상태에서만 관리하고 실패한 요청도 차감합니다. 편집 화면 재진입·추천 초기화·추가 보호 시 유지되며 새 입력이나 페이지 새로고침 시 초기화됩니다. 서버의 호출 제한은 아니므로 API 직접 호출은 제한하지 않습니다. 이미지는 메모리로만 처리하고 결과 영역 PNG를 `no-store`로 반환합니다.
+
+기본 모델 및 REST 형식은 [Google 이미지 생성 문서](https://ai.google.dev/gemini-api/docs/generate-content/image-generation)를 기준으로 연결했습니다. 실제 호출은 실행하지 않았으므로 프로젝트에서 사용 가능한 모델과 과금 설정을 확인해야 합니다. 키를 프론트 환경변수에 넣지 마세요. 기존 합성 자료 테스트 범위를 유지합니다.
