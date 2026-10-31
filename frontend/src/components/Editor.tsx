@@ -111,7 +111,7 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
               onClick={() => preview && onZoom(preview)}><Icon name="search" /></button>
           </> : <p className="text-preview">사진 없이 글만 올렸어요. 글은 적용할 때 확인해요.</p>}
         </div>
-        {photo && chosen?.category === "location" && chosen.bbox && (
+        {photo && chosen?.bbox && (
           <ImageRegeneration key={`${photoIndex}:${chosen.key}`} demo={demo}
             letter={letters.get(chosen.key) ?? ""}
             bbox={chosen.bbox} attempts={attempts} disabled={busy || rendering || pendingMask || !!error}

@@ -116,6 +116,10 @@ assert.equal(await evaluate(`document.querySelectorAll('.editor input[type=range
 await evaluate(`document.querySelectorAll('.region-row')[0].click()`);
 await click('블러');
 await until(`!document.querySelector('.render-badge')`);
+for (const i of [0, 1]) {
+  await evaluate(`document.querySelectorAll('.region-row')[${i}].click()`);
+  assert.equal(await evaluate(`!!document.querySelector('.image-workspace .generation-panel button')`), true, 'regeneration is offered for text and object regions too');
+}
 await evaluate(`document.querySelectorAll('.region-row')[2].click()`);
 assert.deepEqual(await enabled(), ['가림']);
 assert.equal(await evaluate(`!!document.querySelector('.image-workspace .generation-panel') && !document.querySelector('.controls-card .generation-panel')`), true, 'regeneration sits under the photo');
