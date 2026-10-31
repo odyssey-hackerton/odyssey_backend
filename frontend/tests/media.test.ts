@@ -19,7 +19,7 @@ test("invalid and out-of-bounds detection rectangles cannot reach the editor", (
   assert.equal(validBox(undefined, 100, 100), null);
 });
 
-test("multi-photo demo retains image identity and leaves a residual clue", () => {
+test("multi-photo demo keeps each photo's regions and a recommended action", () => {
   const photo = {
     file: new File([], "sample.png"),
     url: "blob:test",
@@ -28,7 +28,8 @@ test("multi-photo demo retains image identity and leaves a residual clue", () =>
   };
   const clues = demoClues([photo, { ...photo, width: 700, height: 826 }]);
   assert.equal(clues.length, 6);
-  assert.equal(clues.filter((c) => c.action === "skip").length, 2);
+  assert.ok(clues.every((c) => c.kind === "image" && c.action === c.recommended));
   assert.equal(clues[3].imageIndex, 1);
+  assert.equal(clues[3].jobIndex, 1);
   assert.equal(clues[3].bbox![0], clues[0].bbox![0] / 2);
 });

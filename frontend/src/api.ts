@@ -156,3 +156,47 @@ export function watchJob(
   }
   return stop;
 }
+
+const SETTLED: JobStatus[] = ["DONE", "FAILED", "AWAITING_USER"];
+
+/** 작업이 사용자 선택 대기·완료·실패 중 하나가 될 때까지 기다린다. 진행 상태는 onState 로 받는다. */
+export function waitForJob(
+  id: string,
+  onState: (s: JobState) => void,
+  signal?: AbortSignal,
+): Promise<JobState> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("aborted", "AbortError"));
+    const stop = watchJob(id, (state) => {
+      onState(state);
+      if (SETTLED.includes(state.status)) {
+        signal?.removeEventListener("abort", abort);
+        resolve(state);
+      }
+    });
+    const abort = () => {
+      stop();
+      reject(new DOMException("aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/** 결과 presigned URL 에서 이미지를 받아 공유·다운로드할 수 있는 File 로 만든다. */
+export async function fetchResultFile(url: string, name: string): Promise<File> {
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch {
+    throw new ApiError(
+      "결과 사진을 가져오지 못했어요. S3 접근(CORS) 설정을 확인해 주세요.",
+    );
+  }
+  if (!res.ok)
+    throw new ApiError("결과 사진을 가져오지 못했어요. 링크가 만료됐을 수 있어요.");
+  const blob = await res.blob();
+  if (!blob.type.startsWith("image/"))
+    throw new ApiError("서버가 이미지 파일을 돌려주지 않았어요.");
+  const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
+  return new File([blob], `${name}.${ext}`, { type: blob.type });
+}
