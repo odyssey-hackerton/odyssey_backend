@@ -24,13 +24,32 @@ from app.api.deps import RedisDep, SessionDep, SettingsDep, StorageDep
 from app.db.models import Job
 from app.queue.producer import enqueue_job
 from app.queue.progress import get_progress, set_progress
-from app.schemas.contract import FINAL_STATUSES, InputType, JobMessage, JobOptions, JobStatus
-from app.schemas.jobs import ErrorOut, JobCreated, JobReportOut, JobResultOut, JobStatusOut
+from app.schemas.contract import (
+    FINAL_STATUSES,
+    TERMINAL_STATUSES,
+    InputType,
+    JobMessage,
+    JobOptions,
+    JobStatus,
+    UserChoice,
+)
+from app.schemas.jobs import (
+    ErrorOut,
+    JobCreated,
+    JobReportOut,
+    JobResultOut,
+    JobStatusOut,
+    TransformRequest,
+)
 from app.services.uploads import detect_image_type
 from app.storage.s3 import original_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+
+
+def _text_cache_key(job_id: str) -> str:
+    return f"text:{job_id}"
 
 SSE_POLL_SECONDS = 0.5
 SSE_MAX_SECONDS = 600
@@ -160,6 +179,9 @@ async def create_job(
         await set_progress(
             redis, str(job_id), JobStatus.QUEUED, ttl_seconds=settings.progress_ttl_seconds
         )
+        # 원본 글을 Redis에 임시 보관 (Phase 2 변환 시 재사용, DB에는 저장하지 않음)
+        if text is not None:
+            await redis.setex(_text_cache_key(str(job_id)), settings.progress_ttl_seconds, text)
         await enqueue_job(redis, settings.jobs_stream, message, settings.stream_maxlen)
     except Exception:
         logger.exception("enqueue failed for job %s", job_id)
@@ -174,8 +196,8 @@ async def create_job(
 
 
 def _status_out(job: Job, progress: dict[str, str]) -> JobStatusOut:
-    # DB가 최종 상태면 DB 기준, 아니면 워커가 갱신하는 Redis 진행 상태 기준
-    if job.status in FINAL_STATUSES or not progress:
+    # DB가 종료 상태(DONE/FAILED/AWAITING_USER)면 DB 기준, 아니면 Redis 진행 상태 기준
+    if job.status in TERMINAL_STATUSES or not progress:
         current, iteration, message = job.status, 0, None
     else:
         current = progress.get("status", job.status)
@@ -272,17 +294,90 @@ async def job_events(
             snapshot = (out.status, out.iteration, out.message)
             if snapshot != last:
                 last = snapshot
-                event = "done" if out.status in FINAL_STATUSES else "progress"
-                yield {"event": event, "data": out.model_dump_json()}
-                if event == "done":
+                if out.status in FINAL_STATUSES:
+                    yield {"event": "done", "data": out.model_dump_json()}
                     return
+                elif out.status == JobStatus.AWAITING_USER:
+                    yield {"event": "awaiting_user", "data": out.model_dump_json()}
+                    return
+                else:
+                    yield {"event": "progress", "data": out.model_dump_json()}
             await asyncio.sleep(SSE_POLL_SECONDS)
         yield {"event": "timeout", "data": json.dumps({"job_id": str(job_id)})}
 
     return EventSourceResponse(stream(), ping=15)
 
 
+AWAITING = {409: _err("AWAITING_USER 상태가 아닌 작업", "job is not AWAITING_USER")}
 NOT_DONE = {409: _err("아직 끝나지 않았거나 실패한 작업", "job is ANALYZING")}
+
+
+@router.post(
+    "/{job_id}/transform",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=JobCreated,
+    summary="변환 시작 (사용자 선택 제출)",
+    response_description="변환 큐에 등록됨. SSE로 다시 진행 상황을 받는다.",
+    responses={
+        **NOT_FOUND,
+        **AWAITING,
+        503: _err("큐 등록 실패", "작업 등록에 실패했습니다"),
+    },
+)
+async def submit_transform(
+    job_id: JobIdPath,
+    session: SessionDep,
+    redis: RedisDep,
+    settings: SettingsDep,
+    body: TransformRequest,
+) -> JobCreated:
+    """탐지·분석(`AWAITING_USER`) 결과를 확인한 뒤 항목별 처리 방법을 골라 변환을 시작한다.
+
+    `/report`로 받은 `findings` 리스트의 인덱스(`idx`)와 처리 방법(`action`)을 보낸다.
+    목록에 없는 항목은 AI가 추천한 action을 그대로 사용한다.
+
+    ```bash
+    curl -X POST http://10.1.1.27/api/jobs/{job_id}/transform \\
+         -H "Content-Type: application/json" \\
+         -d '{"choices": [{"idx": 0, "action": "blur"}, {"idx": 2, "action": "skip"}]}'
+    ```
+    """
+    job = await _get_job(session, job_id, with_result=True)
+    if job.status != JobStatus.AWAITING_USER:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"job is {job.status}")
+
+    # Redis에 임시 보관한 원본 텍스트 복원
+    cached = await redis.get(_text_cache_key(str(job_id)))
+    text = cached.decode() if cached else None
+
+    user_choices = [UserChoice(idx=c.idx, action=c.action) for c in body.choices]
+    message = JobMessage(
+        job_id=job_id,
+        input_type=job.input_type,
+        object_key=job.object_key,
+        text=text,
+        options=JobOptions(max_iterations=settings.max_iterations),
+        created_at=datetime.now(UTC),
+        user_choices=user_choices,
+    )
+
+    job.status = JobStatus.QUEUED
+    await session.commit()
+
+    try:
+        await set_progress(
+            redis, str(job_id), JobStatus.QUEUED, ttl_seconds=settings.progress_ttl_seconds
+        )
+        await enqueue_job(redis, settings.jobs_stream, message, settings.stream_maxlen)
+    except Exception:
+        logger.exception("enqueue transform failed for job %s", job_id)
+        job.status = JobStatus.AWAITING_USER
+        await session.commit()
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "작업 등록에 실패했습니다"
+        ) from None
+
+    return JobCreated(job_id=job_id, status=JobStatus.QUEUED)
 
 
 @router.get(
@@ -330,7 +425,7 @@ async def get_report(job_id: JobIdPath, session: SessionDep) -> JobReportOut:
     `findings`의 `bbox`로 원본·결과 이미지 위에 탐지 위치를 표시할 수 있다.
     """
     job = await _get_job(session, job_id, with_result=True)
-    if job.status != JobStatus.DONE or job.result is None:
+    if job.status not in (JobStatus.DONE, JobStatus.AWAITING_USER) or job.result is None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"job is {job.status}")
     r = job.result
     return JobReportOut(

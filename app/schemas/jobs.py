@@ -12,8 +12,8 @@ JOB_ID_EXAMPLE = "3f2b9c1e-8a4d-4c7b-9e21-5d6f0a1b2c3d"
 
 STATUS_DESCRIPTION = (
     "작업 상태. `QUEUED`(대기) → `DETECTING`(① 탐지) → `ANALYZING`(② 위험 분석) → "
-    "`TRANSFORMING`(③ 변환) → `VERIFYING`(② 재검증, 최대 3회 반복) → `DONE`(완료) "
-    "또는 `FAILED`(실패)"
+    "`AWAITING_USER`(사용자 선택 대기) → `TRANSFORMING`(③ 변환) → "
+    "`VERIFYING`(② 재검증, 최대 3회 반복) → `DONE`(완료) 또는 `FAILED`(실패)"
 )
 
 
@@ -134,6 +134,22 @@ class JobReportOut(BaseModel):
     details: dict[str, Any] = Field(
         description="AI 워커가 남긴 부가 정보 (모델 이름, 단계별 기록 등). 형식은 자유다.",
         examples=[{"model": "paddleocr+vlm", "loops": [{"risk": 0.82}, {"risk": 0.12}]}],
+    )
+
+
+class UserChoiceIn(BaseModel):
+    """사용자가 선택한 탐지 항목 처리 방법."""
+
+    idx: int = Field(description="findings 리스트 인덱스")
+    action: str = Field(description="`blur` | `mask` | `remove` | `skip`", examples=["blur"])
+
+
+class TransformRequest(BaseModel):
+    """변환 요청. `AWAITING_USER` 상태인 작업에 사용자 선택을 전달한다."""
+
+    choices: list[UserChoiceIn] = Field(
+        description="findings 항목별 처리 방법. 목록에 없는 항목은 AI 추천 action을 그대로 쓴다.",
+        examples=[[{"idx": 0, "action": "blur"}, {"idx": 1, "action": "skip"}]],
     )
 
 
