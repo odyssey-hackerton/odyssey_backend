@@ -3,6 +3,11 @@
 .env.*
 !.env.example
 
+# 프론트
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
 # Python
 __pycache__/
 *.py[cod]

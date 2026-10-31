@@ -56,6 +56,28 @@ class Storage:
 
         return await asyncio.to_thread(_get)
 
+    async def delete(self, key: str) -> None:
+        """Delete the exact temporary key, including retained S3 versions."""
+        if not key.startswith(ORIGINALS_PREFIX):
+            raise ValueError("only temporary originals may be deleted")
+
+        def _delete() -> None:
+            pages = self._client.get_paginator("list_object_versions")
+            for page in pages.paginate(Bucket=self.bucket, Prefix=key):
+                objects = [
+                    {"Key": key, "VersionId": item["VersionId"]}
+                    for item in page.get("Versions", []) + page.get("DeleteMarkers", [])
+                    if item["Key"] == key
+                ]
+                if objects:
+                    result = self._client.delete_objects(
+                        Bucket=self.bucket, Delete={"Objects": objects, "Quiet": True}
+                    )
+                    if result.get("Errors"):
+                        raise RuntimeError("temporary image deletion failed")
+
+        await asyncio.to_thread(_delete)
+
     def presign_get(self, key: str, expires_seconds: int) -> str:
         # 서명은 로컬 계산이라 네트워크 호출이 없다.
         return self._client.generate_presigned_url(

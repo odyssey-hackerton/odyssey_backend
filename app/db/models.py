@@ -20,6 +20,8 @@ class Job(Base):
     input_type: Mapped[str] = mapped_column(String(10))
     status: Mapped[str] = mapped_column(String(20), default="QUEUED", index=True)
     object_key: Mapped[str | None] = mapped_column(String(255))
+    input_sha256: Mapped[str | None] = mapped_column(String(64))
+    execution_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     result_object_key: Mapped[str | None] = mapped_column(String(255))
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
