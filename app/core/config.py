@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # AWS S3
-    s3_bucket: str = "odyssey-images"
+    s3_bucket: str = "odyssey-hackarton-images"
     s3_region: str = "ap-northeast-2"
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None

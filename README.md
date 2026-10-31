@@ -45,7 +45,7 @@ uv run python scripts/smoke_test.py http://localhost
 
 1. S3 버킷 생성: 리전 `ap-northeast-2`, 퍼블릭 액세스 차단 ON, 기본 암호화 SSE-S3
 2. 수명 주기 규칙: 접두사 `originals/`, 생성 후 1일 뒤 만료 삭제
-3. IAM 사용자 2개를 만들고 각각 아래 정책만 연결한 뒤 액세스 키 발급 (`odyssey-images`는 실제 버킷 이름으로)
+3. IAM 사용자 2개를 만들고 각각 아래 정책만 연결한 뒤 액세스 키 발급
 
 API 서버용:
 
@@ -53,9 +53,9 @@ API 서버용:
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Effect": "Allow", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::odyssey-images/originals/*" },
-    { "Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::odyssey-images/results/*" },
-    { "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::odyssey-images" }
+    { "Effect": "Allow", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::odyssey-hackarton-images/originals/*" },
+    { "Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::odyssey-hackarton-images/results/*" },
+    { "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::odyssey-hackarton-images" }
   ]
 }
 ```
@@ -66,8 +66,8 @@ GPU 워커용:
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::odyssey-images/originals/*" },
-    { "Effect": "Allow", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::odyssey-images/results/*" }
+    { "Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::odyssey-hackarton-images/originals/*" },
+    { "Effect": "Allow", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::odyssey-hackarton-images/results/*" }
   ]
 }
 ```
