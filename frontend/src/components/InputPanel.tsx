@@ -148,8 +148,8 @@ export default function InputPanel({
         <div className="privacy-note">
           <Icon name="lock" size={18} />
           <p>
-            사진과 글은 이 브라우저 안에서만 처리하고 서버로 보내지 않아요. 새로고침하면 작업이
-            사라져요.
+            사진과 글은 분석을 위해 서버와 AI로 보내요. 서버의 원본 사진은 분석 직후 지우고, 편집할
+            때 이 화면의 사진을 다시 보내요. 새로고침하면 사진을 다시 선택해야 해요.
           </p>
         </div>
       </aside>

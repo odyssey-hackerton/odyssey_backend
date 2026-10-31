@@ -1,27 +1,28 @@
 import { useEffect, useRef, useState } from "react";
-import { maskText, riskScore, textClues, type Clue, type EditAction } from "./flow";
 import {
-  demoClues,
-  hasExif,
-  photoFromBlob,
-  readPhoto,
-  renderPhoto,
-  validateFiles,
-  type Photo,
-} from "./media";
+  createPost,
+  fetchImage,
+  getPostReport,
+  getPostResult,
+  transformPost,
+  waitForPost,
+  type JobStatus,
+} from "./api";
+import { choicesFor, cluesFromReport, type Clue, type EditAction } from "./flow";
+import { photoFromBlob, readPhoto, renderPhoto, validateFiles, type Photo } from "./media";
 import Analysis from "./components/Analysis";
 import Editor from "./components/Editor";
 import Icon from "./components/Icon";
 import InputPanel from "./components/InputPanel";
-import ProgressTrack, { type Stage } from "./components/ProgressTrack";
+import ProgressTrack from "./components/ProgressTrack";
 import ResultView from "./components/ResultView";
 import TextReview from "./components/TextReview";
 import Verify from "./components/Verify";
 
-// 서버 없이 브라우저에서만 동작한다. 사진·글은 어디에도 보내지 않는다.
-// 단서는 예시 영역 + 글 속 전화번호·이메일 + 사진 파일 정보(EXIF) 확인으로 만들고,
-// 보호 편집은 Canvas 로 그린다. AI 에이전트 단계(① 탐지 → ② 분석 → ③ 변환 → ② 재검증)는
-// 진행 표시로만 보여 준다.
+// 서버 게시물 API(/api/posts)로 동작한다.
+// 03: 게시물 등록 → AI ① 탐지 + ② 위험 분석 → 사용자 선택 대기
+// 04: 미리보기는 브라우저에서 그리고, 적용하면 서버로 ③ 변환 + ② 재검증
+// 06의 건너뛰기(03에서)는 서버를 거치지 않고 사진 파일 정보만 지운다.
 
 const STEPS = ["홈", "업로드", "분석 결과", "보호 편집", "재검증", "공유"];
 const TITLES = [
@@ -35,24 +36,24 @@ const TITLES = [
 const SUBTITLES = [
   "",
   "게시할 사진(최대 4장)과 함께 올릴 글을 넣어 주세요.",
-  "① 탐지와 ② 위험 분석 결과예요. 아직 아무것도 바꾸지 않았어요.",
+  "AI가 ① 탐지와 ② 위험 분석을 마쳤어요. 아직 아무것도 바꾸지 않았어요.",
   "추천 보호가 적용된 모습이에요. 영역을 눌러 가리거나 지우거나 그대로 둘 수 있어요.",
-  "편집한 결과를 다시 확인했어요.",
+  "편집한 결과를 AI가 다시 분석했어요.",
   "보호된 사진과 글로 더 안심하고 공유하세요.",
 ];
-const STAGE_MS = 650;
 
-type Verification = { before: number; after: number };
+type Verification = { before: number | null; after: number | null; remaining: Clue[] };
 
 const messageOf = (e: unknown) =>
   e instanceof Error ? e.message : "요청을 처리하지 못했어요. 다시 시도해 주세요.";
-const wait = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
+const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortError";
 
 export default function App() {
   const [step, setStep] = useState(0);
   const [furthest, setFurthest] = useState(1);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [text, setText] = useState("");
+  const [postId, setPostId] = useState<string | null>(null);
   const [clues, setClues] = useState<Clue[]>([]);
   const [reviewing, setReviewing] = useState(false);
   const [applyText, setApplyText] = useState(true);
@@ -61,14 +62,16 @@ export default function App() {
   const [verification, setVerification] = useState<Verification | null>(null);
   const [skippedEdit, setSkippedEdit] = useState(false);
   const [busy, setBusy] = useState("");
-  const [stage, setStage] = useState<Stage | null>(null);
+  const [stage, setStage] = useState<JobStatus | null>(null);
   const [error, setError] = useState("");
   const [zoom, setZoom] = useState<string | null>(null);
   const objectUrls = useRef(new Set<string>());
+  const running = useRef<AbortController | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
 
   useEffect(
     () => () => {
+      running.current?.abort();
       objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
     },
     [],
@@ -89,6 +92,8 @@ export default function App() {
   }
   /** 입력이 바뀌면 그 뒤 단계 결과는 모두 무효 */
   function invalidate() {
+    running.current?.abort();
+    setPostId(null);
     setClues([]);
     setOutputs([]);
     setOutputText("");
@@ -105,23 +110,35 @@ export default function App() {
     go(0);
   }
 
-  /** 단계 진행 표시를 보여 주며 작업을 실행한다. */
-  async function run(label: string, stages: Stage[], task: () => Promise<void>) {
-    if (busy) return;
+  /** 진행 표시를 띄우고 서버 작업을 실행한다. 새 작업을 시작하면 이전 대기는 취소된다. */
+  async function run(label: string, task: (signal: AbortSignal) => Promise<void>) {
+    running.current?.abort();
+    const controller = new AbortController();
+    running.current = controller;
     setBusy(label);
+    setStage(null);
     setError("");
     try {
-      for (const s of stages) {
-        setStage(s);
-        await wait(STAGE_MS);
-      }
-      await task();
+      await task(controller.signal);
     } catch (e) {
-      setError(messageOf(e));
+      if (!isAbort(e)) setError(messageOf(e));
     } finally {
-      setBusy("");
-      setStage(null);
+      if (running.current === controller) {
+        running.current = null;
+        setBusy("");
+        setStage(null);
+      }
     }
+  }
+
+  /** 게시물이 사용자 선택 대기·완료가 될 때까지 기다린다. 실패면 오류. */
+  async function settle(id: string, signal: AbortSignal) {
+    const state = await waitForPost(id, (s) => setStage(s.status), signal);
+    if (state.status === "FAILED") {
+      const failed = state.items.find((i) => i.status === "FAILED");
+      throw new Error(failed?.error ?? "AI 처리에 실패했어요. 다시 시도해 주세요.");
+    }
+    return state;
   }
 
   const renderAll = (base: Photo[], items: Clue[]) =>
@@ -136,38 +153,28 @@ export default function App() {
       ),
     );
 
-  // ---- 02 → 03: ① 탐지 + ② 위험 분석 ----
-  async function analyze() {
-    const caption = text.trim();
-    if (!photos.length && !caption) return;
-    await run("사진과 글에서 단서를 찾고 있어요", ["DETECTING", "ANALYZING"], async () => {
-      const exif = await Promise.all(photos.map((p) => hasExif(p.file)));
-      const fileClues: Clue[] = exif.flatMap((has, imageIndex) =>
-        has
-          ? [
-              {
-                key: `${imageIndex}:file`,
-                idx: 99,
-                imageIndex,
-                kind: "file" as const,
-                type: "metadata",
-                title: "사진 파일 정보",
-                description: "촬영 위치·시각·기기 같은 정보가 파일에 남아 있어요.",
-                risk: "medium" as const,
-                recommended: "remove" as const,
-                action: "remove" as const,
-              },
-            ]
-          : [],
+  // ---- 02 → 03 (추가 보호면 → 04): 게시물 등록 → ① 탐지 + ② 위험 분석 ----
+  async function analyze(base = photos, baseText = text, next = 2, commit?: () => void) {
+    const caption = baseText.trim();
+    if (!base.length && !caption) return;
+    await run("AI가 사진과 글에서 단서를 찾고 있어요", async (signal) => {
+      const { post_id } = await createPost(
+        base.map((p) => p.file),
+        caption,
       );
-      setClues([...demoClues(photos), ...fileClues, ...textClues(caption)]);
-      go(2);
+      await settle(post_id, signal);
+      const report = await getPostReport(post_id);
+      if (signal.aborted) return;
+      commit?.();
+      setPostId(post_id);
+      setClues(cluesFromReport(report));
+      go(next);
     });
   }
 
-  // ---- 03 → 06: 심층 분석은 아직 없어 보호 편집 없이 공유 단계로 ----
+  // ---- 03 → 06: 건너뛰기. 보호 편집 없이 공유 단계로 ----
   async function skipToShare() {
-    await run("공유할 파일을 준비하고 있어요", [], async () => {
+    await run("공유할 파일을 준비하고 있어요", async () => {
       // 원본 그대로지만 PNG로 다시 그려 사진 파일 정보(EXIF)는 남기지 않는다.
       setOutputs(await renderAll(photos, []));
       setOutputText(text.trim());
@@ -196,21 +203,42 @@ export default function App() {
     setReviewing(false);
     setApplyText(useMaskedText);
     setSkippedEdit(false);
-    const caption = text.trim();
-    await run("보호를 적용하고 다시 확인하고 있어요", ["TRANSFORMING", "VERIFYING"], async () => {
-      const rendered = await renderAll(photos, clues);
-      const left = clues.filter(
-        (c) => (c.kind === "image" && c.action === "skip") || (c.kind === "text" && !useMaskedText),
+    if (!postId) return;
+    await run("보호를 적용하고 AI가 다시 확인하고 있어요", async (signal) => {
+      await transformPost(
+        postId,
+        choicesFor(clues, useMaskedText),
+        photos.map((p) => p.file),
       );
-      setOutputs(rendered);
-      setOutputText(
-        useMaskedText ? maskText(caption, clues.filter((c) => c.kind === "text")) : caption,
+      await settle(postId, signal);
+      const [result, report] = await Promise.all([getPostResult(postId), getPostReport(postId)]);
+      const files = await Promise.all(
+        result.items
+          .filter((i) => i.image_url)
+          .map((i) => fetchImage(i.image_url!, `odyssey-${i.position + 1}`)),
       );
+      const loaded = (await Promise.all(files.map(readPhoto))).map(track);
+      if (signal.aborted) return;
+      setOutputs(loaded);
+      setOutputText(result.text ?? "");
       setVerification({
-        before: riskScore(clues),
-        after: left.length ? riskScore(left) * 0.8 : 0.08,
+        before: report.risk_before,
+        after: report.risk_after,
+        remaining: cluesFromReport(report).filter((c) => c.kind !== "file"),
       });
       go(4);
+    });
+  }
+
+  // ---- 05 → 04: 추가 보호. 편집된 결과를 새 게시물로 다시 분석한다 ----
+  async function moreProtection() {
+    const base = outputs;
+    const baseText = outputText;
+    await analyze(base, baseText, 3, () => {
+      setPhotos(base);
+      setText(baseText);
+      setOutputs([]);
+      setVerification(null);
     });
   }
 
@@ -357,9 +385,10 @@ export default function App() {
                 outputText={outputText}
                 clues={clues}
                 applyText={applyText}
+                remaining={verification.remaining}
                 riskBefore={verification.before}
                 riskAfter={verification.after}
-                onMore={() => go(3)}
+                onMore={() => void moreProtection()}
                 onContinue={() => go(5)}
               />
             )}

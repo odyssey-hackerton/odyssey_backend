@@ -11,6 +11,17 @@ class Base(DeclarativeBase):
     pass
 
 
+class Post(Base):
+    """게시물 1건. 사진(최대 4장)마다 작업을 하나씩 만들어 묶는다. 원본 글은 저장하지 않는다."""
+
+    __tablename__ = "posts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    jobs: Mapped[list["Job"]] = relationship(back_populates="post", order_by="Job.position")
+
+
 class Job(Base):
     """작업 1건. 진행 중 세부 단계는 Redis에만 있고, DB에는 QUEUED / DONE / FAILED만 기록한다."""
 
@@ -26,8 +37,14 @@ class Job(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 게시물에 속한 작업이면 게시물 안의 순서 (0부터, 사진 순서와 같다)
+    post_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("posts.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int | None] = mapped_column(Integer)
 
     result: Mapped["JobResult | None"] = relationship(back_populates="job", uselist=False)
+    post: Mapped[Post | None] = relationship(back_populates="jobs")
 
 
 class JobResult(Base):

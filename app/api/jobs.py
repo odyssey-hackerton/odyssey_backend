@@ -26,7 +26,7 @@ from app.api.deps import RedisDep, SessionDep, SettingsDep, StorageDep
 from app.core.config import Settings
 from app.db.models import Job
 from app.queue.producer import enqueue_job
-from app.queue.progress import get_progress, set_progress
+from app.queue.progress import get_progress, set_progress, text_cache_key
 from app.schemas.contract import (
     FINAL_STATUSES,
     TERMINAL_STATUSES,
@@ -44,16 +44,13 @@ from app.schemas.jobs import (
     JobResultOut,
     JobStatusOut,
     TransformRequest,
+    UserChoiceIn,
 )
 from app.services.uploads import ImageType, detect_image_type
 from app.storage.s3 import original_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
-
-
-def _text_cache_key(job_id: str) -> str:
-    return f"text:{job_id}"
 
 
 SSE_POLL_SECONDS = 0.5
@@ -96,6 +93,83 @@ async def _discard_upload(storage: StorageDep, key: str | None) -> None:
         except Exception:
             # shortcut: DB/큐까지 실패한 업로드의 정리는 S3 1일 수명 주기가 최후 방어선이다.
             logger.error("temporary upload cleanup failed", exc_info=False)
+
+
+async def _register_job(
+    session: SessionDep,
+    redis: RedisDep,
+    storage: StorageDep,
+    settings: Settings,
+    *,
+    image: tuple[bytes, ImageType] | None,
+    text: str | None,
+    post_id: uuid.UUID | None = None,
+    position: int | None = None,
+) -> uuid.UUID:
+    """검증이 끝난 입력으로 작업 1건을 만든다: S3 원본 저장 → DB 기록 → 큐 등록.
+
+    중간에 실패하면 올린 원본을 지우고 작업을 FAILED로 남긴다.
+    """
+    job_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    object_key: str | None = None
+    input_sha256: str | None = None
+
+    if image is not None:
+        data, image_type = image
+        input_sha256 = hashlib.sha256(data).hexdigest()
+        object_key = original_key(f"{job_id}/{execution_id}", image_type.ext)
+        try:
+            await storage.put(object_key, data, image_type.content_type)
+        except Exception:
+            await _discard_upload(storage, object_key)
+            raise HTTPException(503, "사진 저장에 실패했습니다") from None
+
+    input_type = input_type_of(has_image=image is not None, has_text=text is not None)
+    job = Job(
+        id=job_id,
+        input_type=input_type,
+        status=JobStatus.QUEUED,
+        object_key=object_key,
+        input_sha256=input_sha256,
+        execution_id=execution_id,
+        post_id=post_id,
+        position=position,
+    )
+    session.add(job)
+    try:
+        await session.commit()
+    except Exception:
+        await _discard_upload(storage, object_key)
+        raise
+
+    message = JobMessage(
+        job_id=job_id,
+        execution_id=execution_id,
+        input_type=input_type,
+        object_key=object_key,
+        text=text,
+        options=JobOptions(max_iterations=settings.max_iterations),
+        created_at=datetime.now(UTC),
+    )
+    try:
+        await set_progress(
+            redis, str(job_id), JobStatus.QUEUED, ttl_seconds=settings.progress_ttl_seconds
+        )
+        # 원본 글을 Redis에 임시 보관 (Phase 2 변환 시 재사용, DB에는 저장하지 않음)
+        if text is not None:
+            await redis.setex(text_cache_key(str(job_id)), settings.progress_ttl_seconds, text)
+        await enqueue_job(redis, settings.jobs_stream, message, settings.stream_maxlen)
+    except Exception:
+        await _discard_upload(storage, object_key)
+        logger.exception("enqueue failed for job %s", job_id)
+        job.status = JobStatus.FAILED
+        job.error = "enqueue failed"
+        await session.commit()
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "작업 등록에 실패했습니다"
+        ) from None
+    return job_id
 
 
 def input_type_of(*, has_image: bool, has_text: bool) -> InputType:
@@ -180,66 +254,8 @@ async def create_job(
     if text is not None and len(text) > settings.max_text_chars:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "텍스트가 너무 깁니다")
 
-    job_id = uuid.uuid4()
-    execution_id = uuid.uuid4()
-    object_key: str | None = None
-    input_sha256: str | None = None
-
-    if file is not None:
-        data, image_type = await _read_image(file, settings)
-        input_sha256 = hashlib.sha256(data).hexdigest()
-        object_key = original_key(f"{job_id}/{execution_id}", image_type.ext)
-        try:
-            await storage.put(object_key, data, image_type.content_type)
-        except Exception:
-            await _discard_upload(storage, object_key)
-            raise HTTPException(503, "사진 저장에 실패했습니다") from None
-        finally:
-            del data
-
-    input_type = input_type_of(has_image=file is not None, has_text=text is not None)
-    job = Job(
-        id=job_id,
-        input_type=input_type,
-        status=JobStatus.QUEUED,
-        object_key=object_key,
-        input_sha256=input_sha256,
-        execution_id=execution_id,
-    )
-    session.add(job)
-    try:
-        await session.commit()
-    except Exception:
-        await _discard_upload(storage, object_key)
-        raise
-
-    message = JobMessage(
-        job_id=job_id,
-        execution_id=execution_id,
-        input_type=input_type,
-        object_key=object_key,
-        text=text,
-        options=JobOptions(max_iterations=settings.max_iterations),
-        created_at=datetime.now(UTC),
-    )
-    try:
-        await set_progress(
-            redis, str(job_id), JobStatus.QUEUED, ttl_seconds=settings.progress_ttl_seconds
-        )
-        # 원본 글을 Redis에 임시 보관 (Phase 2 변환 시 재사용, DB에는 저장하지 않음)
-        if text is not None:
-            await redis.setex(_text_cache_key(str(job_id)), settings.progress_ttl_seconds, text)
-        await enqueue_job(redis, settings.jobs_stream, message, settings.stream_maxlen)
-    except Exception:
-        await _discard_upload(storage, object_key)
-        logger.exception("enqueue failed for job %s", job_id)
-        job.status = JobStatus.FAILED
-        job.error = "enqueue failed"
-        await session.commit()
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "작업 등록에 실패했습니다"
-        ) from None
-
+    image = await _read_image(file, settings) if file is not None else None
+    job_id = await _register_job(session, redis, storage, settings, image=image, text=text)
     return JobCreated(job_id=job_id, status=JobStatus.QUEUED)
 
 
@@ -358,6 +374,103 @@ async def job_events(
     return EventSourceResponse(stream(), ping=15)
 
 
+async def _check_transform(
+    redis: RedisDep,
+    job: Job,
+    choices: list[UserChoiceIn],
+    image: tuple[bytes, ImageType] | None,
+) -> str | None:
+    """변환을 시작해도 되는지 확인하고, 함께 보낼 원본 글을 돌려준다. 아무것도 바꾸지 않는다."""
+    if job.status != JobStatus.AWAITING_USER:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"job is {job.status}")
+    if job.result is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "analysis result is missing")
+    indices = [choice.idx for choice in choices]
+    if len(set(indices)) != len(indices) or any(i >= len(job.result.findings) for i in indices):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid finding indices")
+
+    has_image = job.input_type in ("image", "image_text")
+    if has_image and (image is None or not job.input_sha256):
+        raise HTTPException(409, "분석한 원본 사진이 필요합니다. 사진을 다시 선택해 주세요")
+    if not has_image and image is not None:
+        raise HTTPException(422, "텍스트 작업에는 사진을 추가할 수 없습니다")
+
+    # Redis에 임시 보관한 원본 텍스트 복원
+    has_text = job.input_type in ("text", "image_text")
+    text = await redis.get(text_cache_key(str(job.id))) if has_text else None
+    if has_text and text is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "원본 글이 만료되었습니다. 다시 업로드해 주세요"
+        )
+    if image is not None and hashlib.sha256(image[0]).hexdigest() != job.input_sha256:
+        raise HTTPException(409, "처음 분석한 사진과 다릅니다. 같은 원본 파일을 선택해 주세요")
+    return text
+
+
+async def _start_transform(
+    session: SessionDep,
+    redis: RedisDep,
+    storage: StorageDep,
+    settings: Settings,
+    job: Job,
+    choices: list[UserChoiceIn],
+    image: tuple[bytes, ImageType] | None,
+    text: str | None,
+) -> None:
+    """확인이 끝난 변환 요청을 큐에 넣는다. 실패하면 원본을 지우고 AWAITING_USER로 되돌린다."""
+    job_id = job.id
+    initial_findings = [Finding.model_validate(f) for f in job.result.findings]
+    execution_id = uuid.uuid4()
+    object_key = None
+    if image is not None:
+        data, image_type = image
+        object_key = original_key(f"{job_id}/{execution_id}", image_type.ext)
+        try:
+            await storage.put(object_key, data, image_type.content_type)
+        except Exception:
+            await _discard_upload(storage, object_key)
+            raise HTTPException(503, "사진 저장에 실패했습니다") from None
+
+    user_choices = [UserChoice(idx=c.idx, action=c.action) for c in choices]
+    message = JobMessage(
+        job_id=job_id,
+        execution_id=execution_id,
+        input_type=job.input_type,
+        object_key=object_key,
+        text=text,
+        options=JobOptions(max_iterations=settings.max_iterations),
+        created_at=datetime.now(UTC),
+        user_choices=user_choices,
+        initial_findings=initial_findings,
+    )
+
+    previous_execution = job.execution_id
+    job.status = JobStatus.QUEUED
+    job.execution_id = execution_id
+    job.object_key = object_key
+    try:
+        await session.commit()
+    except Exception:
+        await _discard_upload(storage, object_key)
+        raise
+
+    try:
+        await set_progress(
+            redis, str(job_id), JobStatus.QUEUED, ttl_seconds=settings.progress_ttl_seconds
+        )
+        await enqueue_job(redis, settings.jobs_stream, message, settings.stream_maxlen)
+    except Exception:
+        await _discard_upload(storage, object_key)
+        logger.exception("enqueue transform failed for job %s", job_id)
+        job.status = JobStatus.AWAITING_USER
+        job.execution_id = previous_execution
+        job.object_key = None
+        await session.commit()
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "작업 등록에 실패했습니다"
+        ) from None
+
+
 AWAITING = {409: _err("AWAITING_USER 상태가 아닌 작업", "job is not AWAITING_USER")}
 NOT_DONE = {409: _err("아직 끝나지 않았거나 실패한 작업", "job is ANALYZING")}
 
@@ -400,83 +513,9 @@ async def submit_transform(
     except (ValueError, ValidationError):
         raise HTTPException(422, "choices는 유효한 선택 목록이어야 합니다") from None
     job = await _get_job(session, job_id, with_result=True, for_update=True)
-    if job.status != JobStatus.AWAITING_USER:
-        raise HTTPException(status.HTTP_409_CONFLICT, f"job is {job.status}")
-    if job.result is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "analysis result is missing")
-    indices = [choice.idx for choice in body.choices]
-    if len(set(indices)) != len(indices) or any(i >= len(job.result.findings) for i in indices):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid finding indices")
-
-    has_image = job.input_type in ("image", "image_text")
-    if has_image and (file is None or not job.input_sha256):
-        raise HTTPException(409, "분석한 원본 사진이 필요합니다. 사진을 다시 선택해 주세요")
-    if not has_image and file is not None:
-        raise HTTPException(422, "텍스트 작업에는 사진을 추가할 수 없습니다")
-    initial_findings = [Finding.model_validate(f) for f in job.result.findings]
-
-    # Redis에 임시 보관한 원본 텍스트 복원
-    cached = await redis.get(_text_cache_key(str(job_id)))
-    text = cached
-    if job.input_type in ("text", "image_text") and text is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "원본 글이 만료되었습니다. 다시 업로드해 주세요"
-        )
-
-    execution_id = uuid.uuid4()
-    object_key = None
-    if file is not None:
-        data, image_type = await _read_image(file, settings)
-        if hashlib.sha256(data).hexdigest() != job.input_sha256:
-            raise HTTPException(409, "처음 분석한 사진과 다릅니다. 같은 원본 파일을 선택해 주세요")
-        object_key = original_key(f"{job_id}/{execution_id}", image_type.ext)
-        try:
-            await storage.put(object_key, data, image_type.content_type)
-        except Exception:
-            await _discard_upload(storage, object_key)
-            raise HTTPException(503, "사진 저장에 실패했습니다") from None
-        finally:
-            del data
-
-    user_choices = [UserChoice(idx=c.idx, action=c.action) for c in body.choices]
-    message = JobMessage(
-        job_id=job_id,
-        execution_id=execution_id,
-        input_type=job.input_type,
-        object_key=object_key,
-        text=text,
-        options=JobOptions(max_iterations=settings.max_iterations),
-        created_at=datetime.now(UTC),
-        user_choices=user_choices,
-        initial_findings=initial_findings,
-    )
-
-    previous_execution = job.execution_id
-    job.status = JobStatus.QUEUED
-    job.execution_id = execution_id
-    job.object_key = object_key
-    try:
-        await session.commit()
-    except Exception:
-        await _discard_upload(storage, object_key)
-        raise
-
-    try:
-        await set_progress(
-            redis, str(job_id), JobStatus.QUEUED, ttl_seconds=settings.progress_ttl_seconds
-        )
-        await enqueue_job(redis, settings.jobs_stream, message, settings.stream_maxlen)
-    except Exception:
-        await _discard_upload(storage, object_key)
-        logger.exception("enqueue transform failed for job %s", job_id)
-        job.status = JobStatus.AWAITING_USER
-        job.execution_id = previous_execution
-        job.object_key = None
-        await session.commit()
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "작업 등록에 실패했습니다"
-        ) from None
-
+    image = await _read_image(file, settings) if file is not None else None
+    text = await _check_transform(redis, job, body.choices, image)
+    await _start_transform(session, redis, storage, settings, job, body.choices, image, text)
     return JobCreated(job_id=job_id, status=JobStatus.QUEUED)
 
 
@@ -536,4 +575,40 @@ async def get_report(job_id: JobIdPath, session: SessionDep) -> JobReportOut:
         iterations=r.iterations,
         findings=r.findings,
         details=r.details,
+    )
+
+
+IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
+
+
+@router.get(
+    "/{job_id}/image",
+    summary="결과 사진 내려받기",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "보호 처리된 사진 파일",
+            "content": {"image/png": {}, "image/jpeg": {}, "image/webp": {}},
+        },
+        404: _err("작업이 없거나 결과 사진이 없음", "result image not found"),
+        **NOT_DONE,
+    },
+)
+async def get_result_image(job_id: JobIdPath, session: SessionDep, storage: StorageDep) -> Response:
+    """`DONE`인 작업의 결과 사진을 이 서버를 거쳐 그대로 내려준다.
+
+    presigned URL과 달리 같은 주소에서 받으므로 브라우저가 파일로 받아 공유·다운로드할 때
+    S3 CORS 설정이 필요 없다. 브라우저에 캐시하지 않는다.
+    """
+    job = await _get_job(session, job_id)
+    if job.status != JobStatus.DONE:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"job is {job.status}")
+    if not job.result_object_key:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "result image not found")
+    data = await storage.get(job.result_object_key)
+    ext = job.result_object_key.rsplit(".", 1)[-1].lower()
+    return Response(
+        content=data,
+        media_type=IMAGE_TYPES.get(ext, "application/octet-stream"),
+        headers={"Cache-Control": "no-store"},
     )

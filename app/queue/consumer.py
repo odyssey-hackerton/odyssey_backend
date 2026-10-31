@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import Settings
 from app.db.models import Job, JobResult
-from app.queue.progress import set_progress
+from app.queue.progress import set_progress, text_cache_key
 from app.schemas.contract import ResultMessage
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,10 @@ async def save_result(
         if msg.status != "AWAITING_USER":
             job.finished_at = datetime.now(UTC)
         await session.commit()
+
+    # 끝난 작업의 원본 글은 더 쓸 일이 없으므로 바로 지운다 (사용자 선택 대기 중에는 남겨 둔다).
+    if msg.status != "AWAITING_USER":
+        await redis.delete(text_cache_key(str(job_id)))
 
     # DB 저장이 끝난 뒤 최종 상태를 기록해야 SSE가 끝났을 때 결과 조회가 가능하다.
     await set_progress(

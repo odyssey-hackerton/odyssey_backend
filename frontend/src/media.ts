@@ -57,57 +57,6 @@ export function validBox(
   return box[2] > box[0] && box[3] > box[1] ? box : null;
 }
 
-// shortcut: 서버 없이 동작하므로 예시 영역(예시 카페 사진 기준 비율)을 모든 사진에 쓴다.
-const DEMO_REGIONS = [
-  {
-    type: "landmark",
-    title: "간판 · 위치 단서",
-    description: "가게 이름과 주변 상권을 통해 위치를 추정할 수 있어요.",
-    risk: "medium" as const,
-    box: [0.22, 0.355, 0.52, 0.415],
-    action: "blur" as const,
-  },
-  {
-    type: "tracking_number",
-    title: "송장 · 주소 노출",
-    description: "택배 송장에 적힌 정보로 주소가 노출될 수 있어요.",
-    risk: "high" as const,
-    box: [0.35, 0.535, 0.46, 0.585],
-    action: "mask" as const,
-  },
-  {
-    type: "reflection",
-    title: "반사된 배경",
-    description: "유리창에 비친 건물, 차량, 인물이 위치나 생활 패턴을 드러낼 수 있어요.",
-    risk: "medium" as const,
-    box: [0.17, 0.43, 0.31, 0.54],
-    action: "blur" as const,
-  },
-];
-
-export function demoClues(photos: Photo[]): Clue[] {
-  return photos.flatMap((p, imageIndex) =>
-    DEMO_REGIONS.map((r, idx) => ({
-      key: `${imageIndex}:${idx}`,
-      idx,
-      imageIndex,
-      kind: "image" as const,
-      type: r.type,
-      title: r.title,
-      description: r.description,
-      risk: r.risk,
-      bbox: [
-        r.box[0] * p.width,
-        r.box[1] * p.height,
-        r.box[2] * p.width,
-        r.box[3] * p.height,
-      ] as [number, number, number, number],
-      recommended: r.action,
-      action: r.action,
-    })),
-  );
-}
-
 /** 워커의 단색 가림 색 (stages/transform.py 의 (20, 33, 56)) */
 const MASK_COLOR = "rgb(20, 33, 56)";
 
@@ -161,11 +110,4 @@ export async function renderPhoto(photo: Photo, clues: Clue[]): Promise<Blob> {
 /** 미리보기 Blob 을 화면·공유용 Photo 로 */
 export async function photoFromBlob(blob: Blob, name: string): Promise<Photo> {
   return readPhoto(new File([blob], name, { type: blob.type || "image/png" }));
-}
-
-/** JPEG/PNG/WebP 파일 앞부분에 촬영 정보(EXIF)가 있는지 본다. 결과 사진은 PNG로 다시 그려 지워진다. */
-export async function hasExif(file: Blob): Promise<boolean> {
-  const head = new Uint8Array(await file.slice(0, 128 * 1024).arrayBuffer());
-  const text = new TextDecoder("latin1").decode(head);
-  return text.includes("Exif\0\0") || text.includes("eXIf");
 }
