@@ -64,7 +64,9 @@ async def save_result(
         job.status = msg.status
         job.result_object_key = msg.result_object_key
         job.error = msg.error
-        job.finished_at = datetime.now(UTC)
+        # AWAITING_USER는 아직 처리 중이므로 finished_at을 기록하지 않는다
+        if msg.status != "AWAITING_USER":
+            job.finished_at = datetime.now(UTC)
         await session.commit()
 
     # DB 저장이 끝난 뒤 최종 상태를 기록해야 SSE가 끝났을 때 결과 조회가 가능하다.
