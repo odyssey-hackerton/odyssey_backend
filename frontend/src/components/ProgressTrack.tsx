@@ -1,4 +1,4 @@
-export type Stage = "DETECTING" | "ANALYZING" | "TRANSFORMING" | "VERIFYING";
+type Stage = "DETECTING" | "ANALYZING" | "TRANSFORMING" | "VERIFYING";
 
 // 워커 파이프라인 순서 그대로: ① 탐지 → ② 위험 분석 → ③ 보호 처리 → ② 재검증
 const STEPS: { status: Stage; label: string; detail: string }[] = [
@@ -8,7 +8,7 @@ const STEPS: { status: Stage; label: string; detail: string }[] = [
   { status: "VERIFYING", label: "재검증", detail: "가린 결과에서 다시 찾아지는지 확인하는 중" },
 ];
 
-export default function ProgressTrack({ status }: { status: Stage }) {
+export default function ProgressTrack({ status }: { status: string }) {
   const current = STEPS.findIndex((s) => s.status === status);
   const active = current === -1 ? null : STEPS[current];
 
