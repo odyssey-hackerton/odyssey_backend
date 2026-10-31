@@ -6,7 +6,7 @@
 - **PostgreSQL**: 작업·결과 메타데이터
 - **Redis**: 작업 큐(`jobs`), 결과 큐(`results`), 진행 상태(`job:{id}`)
 - **AWS S3**: 원본·결과 이미지
-- **React 프론트** (`frontend/`): 사진·글 업로드, 진행 단계 표시, 처리 전후 비교
+- **React 프론트** (`frontend/`): 6단계 보호 편집 화면. 지금은 서버 API를 쓰지 않고 브라우저에서만 동작
 - **Nginx**: 프론트 서빙, `/api` 리버스 프록시
 - **LiteLLM**: LLM/VLM 프록시·폴백, 관리자 UI, 키별 토큰·비용 관리 ([설정](#litellm-프록시))
 - **Mock 워커**: 실제 AI 워커 없이 전체 흐름을 개발·시연하기 위한 가짜 워커
@@ -22,19 +22,17 @@ uv sync
 uv run ruff check . && uv run ruff format --check . && uv run pytest
 ```
 
-프론트 (Node.js 20 이상). 화면만 고칠 때는 서버의 API에 붙여서 개발하면 됩니다.
-
-6단계 React 테스트 UI의 데모/API 모드와 실행 절차는 [frontend/README.md](frontend/README.md), 화면별 API 현황과 추가 계획은 [docs/ui-api-plan.md](docs/ui-api-plan.md)를 참고하세요.
+프론트 (Node.js 20 이상). 지금 프론트는 서버 API를 호출하지 않고 브라우저에서만 동작하므로 백엔드 없이 바로 개발할 수 있습니다. 화면 흐름과 브라우저에서 하는 일은 [frontend/README.md](frontend/README.md)를 참고하세요.
 
 ```bash
 cd frontend
 npm install
-VITE_API_TARGET=http://10.1.1.27 npm run dev   # 서버 API 사용 (VPN 연결 필요), http://localhost:5173
-npm run dev                                     # 로컬 백엔드(localhost:8000) 사용
-npm run build                                   # 타입 검사 + 빌드 확인
+npm run dev     # http://localhost:5173
+npm test
+npm run build   # 타입 검사 + 빌드 확인
 ```
 
-`/api` 요청은 개발 서버가 백엔드로 넘겨 주므로 CORS 설정이 필요 없습니다. 배포 때는 `odyssey-web` 이미지를 빌드하면서 React도 함께 빌드됩니다.
+배포 때는 `odyssey-web` 이미지를 빌드하면서 React도 함께 빌드됩니다.
 
 서버와 같은 구성으로 띄워 보려면 이미지를 빌드·푸시한 뒤(아래 2번) 로컬에서도 `.env`와 `litellm/.env`를 채우고 `docker compose --env-file .env --env-file litellm/.env up -d`를 실행하면 됩니다. 전체 흐름 확인에는 별도로 실행한 AI 워커가 필요합니다. 업로드 → 진행 이벤트 → 결과 이미지 → 리포트 확인:
 

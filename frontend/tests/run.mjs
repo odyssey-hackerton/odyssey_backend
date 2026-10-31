@@ -8,7 +8,7 @@ import { build } from "esbuild";
 const directory = await mkdtemp(join(tmpdir(), "odyssey-tests-"));
 try {
   await build({
-    entryPoints: ["tests/api.test.ts", "tests/media.test.ts"],
+    entryPoints: ["tests/media.test.ts", "tests/flow.test.ts"],
     bundle: true,
     platform: "node",
     format: "esm",
@@ -19,8 +19,8 @@ try {
     process.execPath,
     [
       "--test",
-      join(directory, "api.test.mjs"),
       join(directory, "media.test.mjs"),
+      join(directory, "flow.test.mjs"),
     ],
     { stdio: "inherit" },
   );
