@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import (
     APIRouter,
     File,
@@ -591,6 +592,7 @@ IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "w
             "content": {"image/png": {}, "image/jpeg": {}, "image/webp": {}},
         },
         404: _err("작업이 없거나 결과 사진이 없음", "result image not found"),
+        503: _err("결과 저장소에 연결할 수 없음", "결과 사진을 가져오지 못했습니다"),
         **NOT_DONE,
     },
 )
@@ -605,7 +607,18 @@ async def get_result_image(job_id: JobIdPath, session: SessionDep, storage: Stor
         raise HTTPException(status.HTTP_409_CONFLICT, f"job is {job.status}")
     if not job.result_object_key:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "result image not found")
-    data = await storage.get(job.result_object_key)
+    try:
+        data = await storage.get(job.result_object_key)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "result image not found") from None
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "결과 사진을 가져오지 못했습니다"
+        ) from None
+    except BotoCoreError:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "결과 사진을 가져오지 못했습니다"
+        ) from None
     ext = job.result_object_key.rsplit(".", 1)[-1].lower()
     return Response(
         content=data,

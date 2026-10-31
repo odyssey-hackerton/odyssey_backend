@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from botocore.exceptions import ClientError, EndpointConnectionError
 from fastapi import HTTPException, UploadFile
 
 from app.api import jobs as job_api
@@ -193,3 +194,76 @@ async def test_result_image_is_served_from_this_server(monkeypatch):
     with pytest.raises(HTTPException) as e:
         await job_api.get_result_image(uuid.uuid4(), AsyncMock(), storage)
     assert e.value.status_code == 409
+
+
+@pytest.mark.parametrize("count", [0, 1, 3, 4])
+async def test_share_result_contains_processed_caption_and_every_photo(monkeypatch, count):
+    jobs = [make_job(i, PNG if count else None) for i in range(count or 1)]
+    for job in jobs:
+        job.status = JobStatus.DONE
+        job.result.result_text = "처리된 본문" if job.position == 0 else None
+        job.result_object_key = f"results/{job.id}.png" if count else None
+    post = SimpleNamespace(id=uuid.uuid4(), jobs=jobs)
+    monkeypatch.setattr(posts, "_get_post", AsyncMock(return_value=post))
+
+    result = await posts.get_post_result(post.id, AsyncMock())
+
+    assert result.text == "처리된 본문"
+    assert [item.position for item in result.items] == list(range(count or 1))
+    assert [item.image_url for item in result.items] == [
+        f"/api/jobs/{job.id}/image" if count else None for job in jobs
+    ]
+
+
+@pytest.mark.parametrize("missing", ["image", "text", "record"])
+async def test_incomplete_result_cannot_silently_share_only_some_content(monkeypatch, missing):
+    jobs = [make_job(0, None)] if missing == "text" else [make_job(i, PNG) for i in range(2)]
+    for job in jobs:
+        job.status = JobStatus.DONE
+        job.result_object_key = f"results/{job.id}.png"
+    if missing == "image":
+        jobs[-1].result_object_key = None
+    else:
+        jobs[-1].result = None
+    monkeypatch.setattr(posts, "_get_post", AsyncMock(return_value=SimpleNamespace(jobs=jobs)))
+
+    with pytest.raises(HTTPException) as exc:
+        await posts.get_post_result(uuid.uuid4(), AsyncMock())
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize("state", [JobStatus.AWAITING_USER, JobStatus.VERIFYING, JobStatus.FAILED])
+async def test_share_result_requires_every_item_to_be_done(monkeypatch, state):
+    jobs = [make_job(i, PNG) for i in range(2)]
+    jobs[0].status, jobs[1].status = JobStatus.DONE, state
+    monkeypatch.setattr(posts, "_get_post", AsyncMock(return_value=SimpleNamespace(jobs=jobs)))
+    with pytest.raises(HTTPException) as exc:
+        await posts.get_post_result(uuid.uuid4(), AsyncMock())
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (ClientError({"Error": {"Code": "NoSuchKey", "Message": "private key"}}, "GetObject"), 404),
+        (
+            ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "private bucket"}}, "GetObject"
+            ),
+            503,
+        ),
+        (EndpointConnectionError(endpoint_url="https://private-bucket.invalid"), 503),
+    ],
+)
+async def test_share_image_storage_errors_are_safe_and_actionable(monkeypatch, error, code):
+    job = SimpleNamespace(status=JobStatus.DONE, result_object_key="results/a.png")
+    monkeypatch.setattr(job_api, "_get_job", AsyncMock(return_value=job))
+    storage = AsyncMock(get=AsyncMock(side_effect=error))
+
+    with pytest.raises(HTTPException) as exc:
+        await job_api.get_result_image(uuid.uuid4(), AsyncMock(), storage)
+
+    assert exc.value.status_code == code
+    assert "private" not in exc.value.detail
+    storage.get.assert_awaited_once_with("results/a.png")
