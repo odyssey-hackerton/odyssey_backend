@@ -34,8 +34,9 @@ await send('Runtime.enable');
 await send('Page.enable');
 await send('Emulation.setDeviceMetricsOverride', { width: 1536, height: 1100, deviceScaleFactor: 1, mobile: false });
 await send('Page.addScriptToEvaluateOnNewDocument', { source: `
-window.__posts = []; window.__attempts = 0; window.__apiRequests = [];
+window.__posts = []; window.__transforms = []; window.__attempts = 0; window.__apiRequests = [];
 const realFetch = window.fetch.bind(window);
+const resultPng = async () => { const c = document.createElement('canvas'); c.width = 800; c.height = 600; const x = c.getContext('2d'); x.fillStyle = '#334455'; x.fillRect(0,0,800,600); return new Response(await new Promise(r => c.toBlob(r)), { headers: { 'content-type': 'image/png' }}); };
 window.fetch = async (url, init) => {
   if (!String(url).startsWith('/api/')) return realFetch(url, init);
   window.__apiRequests.push(String(url));
@@ -51,22 +52,32 @@ window.fetch = async (url, init) => {
     const c = document.createElement('canvas'); c.width = 200; c.height = 150;
     const x = c.getContext('2d'); x.fillStyle = '#55bb66'; x.fillRect(0,0,200,150);
     const patch = c.toDataURL('image/png').split(',')[1];
-    return Response.json({ patches: window.__generationBoxes.map(() => patch) });
+    return Response.json({ patches: window.__generationBoxes.map(() => patch), generation_ids: window.__generationBoxes.map((_, i) => 'gen' + window.__attempts + '-' + i) });
   }
   if (url === '/api/posts' && init) {
     window.__posts.push(init.body);
     return Response.json({post_id: 'p' + window.__posts.length});
   }
-  if (String(url).endsWith('/report')) return Response.json({post_id:'p1',status:'AWAITING_USER',risk_before:window.__posts.length === 1 ? .8 : .1,risk_after:null,items:[{position:0,job_id:'j1',input_type:'image',status:'AWAITING_USER',risk_before:.8,risk_after:null,findings:window.__posts.length === 1 ? [
-    {type:'address',source:'ocr',title:'택배 송장',bbox:[70,100,290,190],risk_level:'high',action:'mask'},
-    {type:'face',source:'vlm',title:'사람 얼굴',bbox:[340,120,460,260],action:'blur'},
-    {type:'reflection',source:'vlm',title:'창문 반사',bbox:[500,70,750,270],action:'mask'}
-  ]:[],details:{}}]});
+  if (url === '/api/posts/p1/transform' && init) {
+    window.__transforms.push(init.body);
+    return Response.json({post_id: 'p1', status: 'QUEUED', items: [{position:0, job_id:'j1', input_type:'image'}]});
+  }
+  if (url === '/api/posts/p1/result') return Response.json({post_id:'p1', text:null, items:[{position:0, job_id:'j1', image_url:'/api/jobs/j1/image'}]});
+  if (url === '/api/jobs/j1/image') return resultPng();
+  const done = window.__transforms.length > 0;
+  if (String(url).endsWith('/report')) return Response.json({post_id:'p1',status:done ? 'DONE' : 'AWAITING_USER',risk_before:.8,risk_after:done ? .1 : null,items:[{position:0,job_id:'j1',input_type:'image',status:done ? 'DONE' : 'AWAITING_USER',risk_before:.8,risk_after:done ? .1 : null,findings:done ? [] : [
+    {type:'address',source:'ocr',title:'택배 송장',category:'text',bbox:[70,100,290,190],risk_level:'high',action:'mask',policy:{level:'high',allowed_actions:['mask','blur','remove','regenerate'],anchor_bbox:[70,100,290,190],allow_shrink:false,allow_delete:false,allow_partial:false}},
+    {type:'face',source:'vlm',title:'사람 얼굴',category:'object',bbox:[340,120,460,260],action:'blur',policy:{level:'medium',allowed_actions:['mask','blur','mosaic','regenerate'],anchor_bbox:[340,120,460,260],allow_shrink:true,allow_delete:true,allow_partial:true}},
+    {type:'other',source:'vlm',title:'창문 반사',category:'location',bbox:[500,70,750,270],action:'mask',policy:{level:'medium',allowed_actions:['mask','regenerate'],anchor_bbox:[500,70,750,270],allow_shrink:true,allow_delete:true,allow_partial:true}}
+  ],details:{}}]});
   throw new Error('Unexpected API call: '+url);
 };
 window.EventSource = class {
   constructor() { this.closed=false; }
-  addEventListener(name, f) { if(name === 'awaiting_user') setTimeout(() => { if(!this.closed) f({data:JSON.stringify({status:'AWAITING_USER',items:[]})}); }, 20); }
+  addEventListener(name, f) {
+    const done = window.__transforms.length > 0;
+    if(name === (done ? 'done' : 'awaiting_user')) setTimeout(() => { if(!this.closed) f({data:JSON.stringify({status:done ? 'DONE' : 'AWAITING_USER',items:[]})}); }, 20);
+  }
   close() { this.closed=true; }
 };
 ` });
@@ -212,11 +223,17 @@ const mobile = await send('Page.captureScreenshot',{format:'png',captureBeyondVi
 await writeFile('/tmp/odyssey-editor-mobile.png',Buffer.from(mobile.data,'base64'));
 await send('Emulation.setDeviceMetricsOverride',{width:1536,height:1100,deviceScaleFactor:1,mobile:false});
 await until(`!document.querySelector('.render-badge')`);
-await evaluate(`(async () => { window.__preview = await (await fetch(document.querySelector('.photo-view image').getAttribute('href'))).arrayBuffer(); })()`);
 await click('적용');
 await until(`!!document.querySelector('.verification-card')`);
-assert.equal(await evaluate(`window.__posts.length`),2);
-assert.equal(await evaluate(`(async()=>{const a=new Uint8Array(window.__preview),b=new Uint8Array(await window.__posts[1].get('files').arrayBuffer());return a.length===b.length&&a.every((v,i)=>v===b[i]);})()`),true);
+// 적용은 브라우저 렌더를 올리지 않고, 편집 상태와 원본을 /transform 으로 보내 AI 워커(에이전트3)가 최종 픽셀을 그린다.
+assert.equal(await evaluate(`window.__posts.length`),1);
+assert.equal(await evaluate(`window.__transforms.length`),1);
+const sent = await evaluate(`(async()=>{const f=window.__transforms[0];const o=window.__posts[0].get('files');const r=f.get('files');return {choices:JSON.parse(f.get('choices')),sameOriginal:o.size===r.size&&o.name===r.name};})()`);
+assert.equal(sent.sameOriginal, true, 'the original photo is re-sent, not the preview');
+assert.deepEqual(sent.choices.map(c=>[c.idx,c.action]), [[0,'mask'],[1,'blur'],[2,'mask']], 'reset restored the recommendation for the face');
+assert.deepEqual(sent.choices[0].bbox, [70,100,290,190], 'reset region keeps the original anchor');
+assert.ok(sent.choices.every(c => c.mask_box === undefined && c.generation_id === undefined));
+assert.ok((await evaluate(`document.body.innerText`)).includes('보호 효과'));
 assert.equal(await evaluate(`!!document.querySelector('.alert.error')`),false);
 assert.deepEqual(errors,[]);
 const pixelResults = await evaluate(`(async () => {
@@ -247,7 +264,7 @@ assert.deepEqual(pixelResults.leftMask.center,[255,0,0,255]);
 assert.deepEqual(pixelResults.deleted.center,[255,0,0,255]);
 assert.deepEqual(pixelResults.remove.center,[0,255,0,255]);
 assert.deepEqual(pixelResults.skip.center,[255,0,0,255]);
-console.log('PASS: original two-column layout, offline demo, exact category tools, direct corner resizing, fixed center/aspect, X deletion/reset, user-drawn partial masking, no sliders/movement, independent generation with protected input and failure recovery, generation cap, mobile layout, preview/export equality, browser inpainting and effect pixels.');
+console.log('PASS: original two-column layout, offline demo, exact category tools, direct corner resizing, fixed center/aspect, X deletion/reset, user-drawn partial masking, no sliders/movement, independent generation with protected input and failure recovery, generation cap, mobile layout, apply sends edit state and original to the worker, browser preview effect pixels.');
 } finally {
   await send('Page.close').catch(() => {});
   ws.close();

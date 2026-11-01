@@ -74,13 +74,30 @@ test("transform choices cover every clue; declined caption edits become skip", (
     c.key === "1:0" ? { ...c, action: "skip" as const } : c,
   );
   assert.deepEqual(choicesFor(clues, true), [
-    { position: 0, idx: 0, action: "mask" },
+    { position: 0, idx: 0, action: "mask", bbox: [10, 10, 50, 40] },
     { position: 0, idx: 1, action: "mask" },
     { position: 0, idx: 2, action: "remove" },
     { position: 1, idx: 0, action: "skip" },
-    { position: 1, idx: 1, action: "blur" },
+    { position: 1, idx: 1, action: "blur", bbox: [100, 10, 140, 50] },
   ]);
   assert.equal(choicesFor(clues, false)[1].action, "skip");
+});
+
+test("edited regions send their geometry, partial selection, generation id and deletion", () => {
+  const [sign] = cluesFromReport(report);
+  const resized = { ...sign, bbox: [5, 5, 55, 45] as [number, number, number, number] };
+  assert.deepEqual(choicesFor([resized], true), [{ position: 0, idx: 0, action: "mask", bbox: [5, 5, 55, 45] }]);
+  assert.deepEqual(choicesFor([{ ...resized, deleted: true }], true), [{ position: 0, idx: 0, action: "skip" }]);
+  assert.deepEqual(choicesFor([{ ...sign, action: "partialMask", maskBox: [0.25, 0, 0.75, 1] }], true), [
+    { position: 0, idx: 0, action: "partialMask", bbox: [10, 10, 50, 40], mask_box: [0.25, 0, 0.75, 1] },
+  ]);
+  assert.throws(() => choicesFor([{ ...sign, action: "partialMask" }], true), /범위/);
+  assert.deepEqual(choicesFor([{ ...sign, action: "regenerate", generationId: "ab12", generatedUrl: "blob:x" }], true), [
+    { position: 0, idx: 0, action: "regenerate", bbox: [10, 10, 50, 40], generation_id: "ab12" },
+  ]);
+  // 생성 전의 재생성 선택은 미리보기와 같이 가림으로 보낸다
+  assert.equal(choicesFor([{ ...sign, action: "regenerate" }], true)[0].action, "mask");
+  assert.equal(choicesFor([{ ...sign, action: "regenerate" }], true)[0].generation_id, undefined);
 });
 
 test("caption masking follows the worker rule: remove deletes, others become [가림]", () => {
