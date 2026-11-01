@@ -1,5 +1,5 @@
 # 서버 구성: Docker Hub 이미지만 받아 실행한다 (소스 불필요).
-# 서버에는 이 파일, .env, certs/, litellm/config.yaml, litellm/.env가 필요하다.
+# 서버에는 이 파일, .env, litellm/config.yaml, litellm/.env가 필요하다.
 #
 #   배포:  docker compose --env-file .env --env-file litellm/.env up -d
 #   롤백:  .env 의 IMAGE_TAG 를 이전 태그로 바꾸고 위 명령 다시 실행
@@ -25,13 +25,7 @@ services:
       - "${HTTP_PORT:-80}:80"
       - "443:443"
     volumes:
-      # scripts/make-cert.sh 로 만든 cert.pem, key.pem. 없으면 시작하지 않는다.
-      - type: bind
-        source: ./certs
-        target: /etc/nginx/certs
-        read_only: true
-        bind:
-          create_host_path: false
+      - ./certs:/etc/nginx/certs:ro
     depends_on:
       api:
         condition: service_healthy
@@ -85,68 +79,6 @@ services:
       timeout: 5s
       retries: 10
 
-  litellm:
-    image: ${LITELLM_IMAGE:-docker.litellm.ai/berriai/litellm:1.105.7}
-    restart: unless-stopped
-    command: ["--config", "/app/odyssey-config.yaml", "--port", "4000"]
-    ports:
-      # GPU 워커 연결 시 일반 서버의 사설 IP로 변경하고 ACG에서 접근 제한.
-      - "${LITELLM_BIND:-127.0.0.1}:4000:4000"
-    environment:
-      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in litellm/.env}@litellm-db:5432/litellm
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in litellm/.env}
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set LITELLM_SALT_KEY in litellm/.env}
-      UI_USERNAME: ${LITELLM_UI_USERNAME:-admin}
-      UI_PASSWORD: ${LITELLM_UI_PASSWORD:?set LITELLM_UI_PASSWORD in litellm/.env}
-      LLM_MODEL: ${LLM_MODEL:?set the text model in litellm/.env}
-      LLM_API_BASE: ${LLM_API_BASE:?set the text provider API base in litellm/.env}
-      LLM_API_KEY: ${LLM_API_KEY:?set LLM_API_KEY in litellm/.env}
-      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:?set a backup text model in litellm/.env}
-      LLM_FALLBACK_API_BASE: ${LLM_FALLBACK_API_BASE:?set the backup API base in litellm/.env}
-      LLM_FALLBACK_API_KEY: ${LLM_FALLBACK_API_KEY:?set LLM_FALLBACK_API_KEY in litellm/.env}
-      VLM_MODEL: ${VLM_MODEL:?set the vision model in litellm/.env}
-      VLM_API_BASE: ${VLM_API_BASE:?set the provider API base in litellm/.env}
-      VLM_API_KEY: ${VLM_API_KEY:?set VLM_API_KEY in litellm/.env}
-      VLM_FALLBACK_MODEL: ${VLM_FALLBACK_MODEL:?set a backup vision model in litellm/.env}
-      VLM_FALLBACK_API_BASE: ${VLM_FALLBACK_API_BASE:?set the backup API base in litellm/.env}
-      VLM_FALLBACK_API_KEY: ${VLM_FALLBACK_API_KEY:?set VLM_FALLBACK_API_KEY in litellm/.env}
-      STORE_MODEL_IN_DB: "True"
-      LITELLM_LOG: INFO
-    volumes:
-      - type: bind
-        source: ./litellm/config.yaml
-        target: /app/odyssey-config.yaml
-        read_only: true
-        bind:
-          create_host_path: false
-    depends_on:
-      litellm-db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/readiness', timeout=5)"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 120s
-
-  litellm-db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: litellm
-      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in litellm/.env}
-      POSTGRES_DB: litellm
-    volumes:
-      - litellm-pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
 volumes:
   pgdata:
   redisdata:
-  litellm-pgdata:
-    # 기존 별도 Compose로 실행했던 경우에도 같은 데이터를 사용한다.
-    name: odyssey-litellm_litellm-pgdata
