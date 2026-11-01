@@ -429,10 +429,15 @@ Compose 밖에서 실행할 때는 별도 메모리 임시 디렉터리가 필�
 현재 Gemini 호출은 외부 서비스 전송이므로 S3 삭제가 외부 서비스 삭제를 보장하지 않는다.
 
 
-### 브라우저 보호 편집과 Gemini 배경 재생성
+### 보호 편집(에이전트3)과 이미지재생성
 
-일반 보호 편집은 프론트 Canvas에서 실행하고(텍스트제거는 필요할 때 로드하는 OpenCV.js 인페인팅),, 최종 PNG를 기존 게시물 분석 API로 재검증합니다. 기존 transform API/워커 계약은 유지됩니다. UI 상세와 동작 검증은 [frontend/README.md](frontend/README.md)를 참고하세요.
+편집 화면의 **미리보기**는 프론트 Canvas 로 그리지만(텍스트제거는 필요할 때 로드하는 OpenCV.js 인페인팅), **적용**하면 편집 상태(`choices`: 처리 방법·조절한 영역·부분마스킹 범위·생성 패치 ID·× 삭제)와 원본 사진을 `POST /api/posts/{id}/transform` 으로 보내고, AI 워커의 **에이전트3**(`odyssey_ai/stages/protect.py`, `transform.py`)이 같은 규칙으로 최종 픽셀을 그린 뒤 바로 재검증합니다. 결과는 `/result`·`/report` 로 받습니다. 화면 흐름과 조작은 바뀌지 않았습니다.
 
-배경 재생성은 게시물·분석 작업에서 분리한 API `GET/POST /api/images/regenerate`를 사용합니다. GET은 키 설정 여부만 반환하고 POST는 전처리된 사진(`file`)과 영역 좌표를 받아 Gemini를 호출합니다. 영역 하나는 `bbox`(응답 PNG), 여러 영역은 `boxes`(최대 20개, 응답 `{"patches": [base64 PNG, ...]}`)로 보내며 `boxes`는 AI를 한 번만 호출합니다. 화면은 사진 한 장의 영역을 `boxes`로 한 번에 보냅니다. 게시물 ID·DB 조회·큐 작업은 필요 없습니다. 전처리는 호출자 책임이며, 현재 화면은 AI가 처음 추천한 보호 처리본을 전달합니다. 사용자가 바꾼 편집은 들어가지 않습니다. 버튼은 보호 편집 화면의 사진 바로 아래에 있고, 텍스트·객체·간접위치 모든 영역에서 쓸 수 있습니다. API 서버 `.env`의 `GEMINI_API_KEY`, `GEMINI_IMAGE_MODEL` 설정이 필요합니다. DB 스키마 변경·마이그레이션·Redis 카운터는 없습니다. 최초 1회와 재생성 2회 제한은 사진별 프론트 React 상태에서만 관리하고 실패한 요청도 차감합니다. 편집 화면 재진입·추천 초기화·추가 보호 시 유지되며 새 입력이나 페이지 새로고침 시 초기화됩니다. 서버의 호출 제한은 아니므로 API 직접 호출은 제한하지 않습니다. 이미지는 메모리로만 처리하고 결과 영역 PNG를 `no-store`로 반환합니다.
+- 분석(`AWAITING_USER`) 리포트의 `findings` 에는 에이전트3이 `category`(`text`|`object`|`location`, 편집 도구 분류), 추천 `action`, `policy`(허용 처리·축소/삭제/부분마스킹 가능 여부·최초 영역)를 붙여 보냅니다. ② 위험 8분류는 `risk_category` 로 보존됩니다.
+- `choices[].action` 은 `mask` `blur` `mosaic` `partialMask`(`mask_box` 필요) `remove` `regenerate`(`generation_id` 필요) `skip`. 글 단서는 `mask` `remove` `skip` 만.
+- 정책보다 약한 편집(고위험 항목의 축소·× 삭제·부분마스킹, 전체 가림만 허용된 항목의 블러 등)은 API 가 `422` 와 사용자용 메시지로 거절하고(`app/services/policy.py`), 워커도 같은 규칙을 다시 검사합니다. 규칙은 두 레포에서 같이 고칩니다.
+- 워커가 `FAILED` 로 끝난 작업은 다시 변환할 수 없으므로 사진을 다시 분석해야 합니다 (기존 v2 흐름과 같음).
 
-기본 모델 및 REST 형식은 [Google 이미지 생성 문서](https://ai.google.dev/gemini-api/docs/generate-content/image-generation)를 기준으로 연결했습니다. 실제 호출은 실행하지 않았으므로 프로젝트에서 사용 가능한 모델과 과금 설정을 확인해야 합니다. 키를 프론트 환경변수에 넣지 마세요. 기존 합성 자료 테스트 범위를 유지합니다.
+**이미지재생성**은 게시물·분석 작업에서 분리한 API `GET/POST /api/images/regenerate`를 사용하며 Gemini 호출도 API 서버가 그대로 합니다(`app/services/regeneration.py`, `.env`의 `GEMINI_API_KEY`·`GEMINI_IMAGE_MODEL`). GET은 키 설정 여부만 반환하고 POST는 전처리된 사진(`file`)과 영역 좌표를 받습니다. 영역 하나는 `bbox`(응답 PNG + 헤더 `X-Generation-Id`), 여러 영역은 `boxes`(최대 20개, 응답 `{"patches": [base64 PNG, ...], "generation_ids": [...]}`)로 보내며 `boxes`는 AI를 한 번만 호출합니다. 화면은 사진 한 장의 영역을 `boxes`로 한 번에 보내고, 전처리본은 AI가 처음 추천한 보호 처리본입니다(사용자가 바꾼 편집은 들어가지 않음). 결과 패치는 Redis `generation:{id}` 에 보관(`PROGRESS_TTL_SECONDS`, 기본 24시간)되고, 적용할 때 `choices[].generation_id` 를 보내면 워커가 최종 렌더에서 같은 픽셀을 합성합니다. 만료됐으면 변환 요청이 422 로 거절됩니다. 입력 사진은 저장하지 않으며 DB 스키마 변경·마이그레이션은 없습니다. 사진별 3회(최초 1 + 재생성 2) 제한과 실패 차감은 프론트 React 상태에서만 관리합니다.
+
+메시지 형식은 [`app/schemas/contract.py`](app/schemas/contract.py)(`UserChoice`, `generation_key`)에 있습니다. 기본 모델 및 REST 형식은 [Google 이미지 생성 문서](https://ai.google.dev/gemini-api/docs/generate-content/image-generation)를 기준으로 연결했습니다. 실제 Gemini 호출·GPU 서버 배포는 이 변경에서 실행하지 않았습니다. 키를 프론트 환경변수에 넣지 마세요.

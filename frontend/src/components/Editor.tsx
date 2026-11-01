@@ -25,7 +25,7 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
   onReset: (imageIndex: number) => void;
   onApply: () => void;
   onZoom: (url: string) => void;
-  onGenerated: (key: string, blob: Blob) => void;
+  onGenerated: (key: string, blob: Blob, generationId: string) => void;
   onBusy: (busy: boolean) => void;
 }) {
   const [photoIndex, setPhotoIndex] = useState(0);
@@ -124,8 +124,8 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
             disabled={busy || rendering || pendingMask || !!error}
             prepareImage={() => renderPhoto(photo, generationBase(clues, photoIndex, targets.map((c) => c.key)))}
             onAttempt={() => onGenerationAttempt(photoIndex)}
-            onGenerated={(blobs) => {
-              targets.forEach((c, i) => onGenerated(c.key, blobs[i]));
+            onGenerated={(results) => {
+              targets.forEach((c, i) => onGenerated(c.key, results[i].blob, results[i].generationId));
               setConfirmed((all) => all.map((v, i) => i === photoIndex ? false : v));
             }}
             onBusy={onBusy} />

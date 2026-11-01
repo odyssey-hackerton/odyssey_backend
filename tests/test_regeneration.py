@@ -120,19 +120,61 @@ def api_setup(monkeypatch):
     return generate
 
 
-async def call(**kwargs):
+class FakeRedis:
+    """generation:{id} 보관만 흉내 낸다 (pipeline setex)."""
+
+    def __init__(self, fail=False):
+        self.values: dict[str, tuple[int, str]] = {}
+        self.fail = fail
+
+    def pipeline(self, transaction=True):
+        redis = self
+
+        class Pipe:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def setex(self, key, ttl, value):
+                redis.values[key] = (ttl, value)
+
+            async def execute(self):
+                if redis.fail:
+                    from redis.exceptions import ConnectionError as RedisConnectionError
+
+                    raise RedisConnectionError("down")
+
+        return Pipe()
+
+
+async def call(redis=None, **kwargs):
     return await api.regenerate(
         Settings(gemini_api_key="fake"),
+        redis or FakeRedis(),
         UploadFile(BytesIO(png()), filename="a.png"),
         **kwargs,
     )
 
 
-async def test_generation_returns_patch_without_storing_usage(api_setup):
+async def test_generation_returns_patch_and_keeps_it_for_the_worker(api_setup):
+    """패치는 generation:{id} 에만 보관한다 (워커가 적용 시 합성). 입력 사진은 저장하지 않는다."""
     generate = api_setup
-    response = await call(bbox="[10,20,30,40]")
+    redis = FakeRedis()
+    response = await call(redis, bbox="[10,20,30,40]")
     assert response.media_type == "image/png" and response.headers["cache-control"] == "no-store"
     generate.assert_called_once()
+    generation_id = response.headers["x-generation-id"]
+    [(key, (ttl, value))] = redis.values.items()  # 입력 사진·호출 횟수는 저장하지 않는다
+    assert key == f"generation:{generation_id}" and ttl == Settings().progress_ttl_seconds
+    assert base64.b64decode(value) == response.body
+
+
+async def test_patch_store_failure_is_reported(api_setup):
+    with pytest.raises(HTTPException) as error:
+        await call(FakeRedis(fail=True), bbox="[10,20,30,40]")
+    assert error.value.status_code == 503
 
 
 async def test_invalid_input_does_not_call_provider(api_setup):
@@ -162,11 +204,13 @@ async def test_standalone_endpoint_needs_no_post_or_database(api_setup):
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient
 
+    from app.api.deps import get_redis
     from app.core.config import get_settings
 
     app = FastAPI()
     app.include_router(api.router)
     app.dependency_overrides[get_settings] = lambda: Settings(gemini_api_key="fake")
+    app.dependency_overrides[get_redis] = FakeRedis
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         status = await client.get("/api/images/regenerate")
         assert status.json() == {"enabled": True}
@@ -178,6 +222,7 @@ async def test_standalone_endpoint_needs_no_post_or_database(api_setup):
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.headers["cache-control"] == "no-store"
+    assert len(response.headers["x-generation-id"]) == 32
     api_setup.assert_called_once()
 
 
@@ -242,7 +287,8 @@ def test_many_regions_use_one_provider_call_and_keep_order(monkeypatch):
 async def test_boxes_request_returns_patches_in_one_call(monkeypatch):
     generate = MagicMock(return_value=[png((20, 20)), png((10, 10))])
     monkeypatch.setattr(api, "generate_patches", generate)
-    response = await call(boxes="[[10,20,30,40],[50,50,60,60]]")
+    redis = FakeRedis()
+    response = await call(redis, boxes="[[10,20,30,40],[50,50,60,60]]")
     body = json.loads(response.body)
     assert response.headers["cache-control"] == "no-store"
     assert [Image.open(BytesIO(base64.b64decode(p))).size for p in body["patches"]] == [
@@ -250,6 +296,10 @@ async def test_boxes_request_returns_patches_in_one_call(monkeypatch):
         (10, 10),
     ]
     generate.assert_called_once()
+    # 영역 순서대로 generation_id 가 오고, 워커가 읽을 키에 같은 패치가 들어 있다
+    assert len(body["generation_ids"]) == 2 and len(set(body["generation_ids"])) == 2
+    for generation_id, patch in zip(body["generation_ids"], body["patches"], strict=True):
+        assert redis.values[f"generation:{generation_id}"][1] == patch
 
 
 @pytest.mark.parametrize("kwargs", [{}, {"bbox": "[1,1,2,2]", "boxes": "[[1,1,2,2]]"}])

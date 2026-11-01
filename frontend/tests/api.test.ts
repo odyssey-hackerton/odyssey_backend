@@ -80,17 +80,20 @@ test("background generation sends every region in one call and splits the patche
     assert.deepEqual(JSON.parse(form.get("boxes") as string), [[10, 20, 30, 40], [50, 60, 70, 80]]);
     assert.equal(form.get("bbox"), null);
     if (fail) return Response.json({ detail: "배경을 생성하지 못했어요." }, { status: 502 });
-    return Response.json({ patches: [btoa("first"), btoa("second")] });
+    if (requests === 2) return Response.json({ patches: [btoa("first"), btoa("second")] });
+    return Response.json({ patches: [btoa("first"), btoa("second")], generation_ids: ["g1", "g2"] });
   };
   try {
     const boxes: [number, number, number, number][] = [[10, 20, 30, 40], [50, 60, 70, 80]];
     await assert.rejects(regenerateBackgrounds(new Blob(["edited pixels"]), boxes), /생성하지 못/);
     fail = false;
-    const blobs = await regenerateBackgrounds(new Blob(["edited pixels"]), boxes);
-    assert.deepEqual(await Promise.all(blobs.map((b) => b.text())), ["first", "second"]);
-    assert.ok(blobs.every((b) => b.type === "image/png"));
+    await assert.rejects(regenerateBackgrounds(new Blob(["edited pixels"]), boxes), /형식/); // generation_ids 없음
+    const results = await regenerateBackgrounds(new Blob(["edited pixels"]), boxes);
+    assert.deepEqual(await Promise.all(results.map((r) => r.blob.text())), ["first", "second"]);
+    assert.deepEqual(results.map((r) => r.generationId), ["g1", "g2"]);
+    assert.ok(results.every((r) => r.blob.type === "image/png"));
     assert.deepEqual(await getGenerationStatus(), { enabled: true });
-    assert.equal(requests, 3);
+    assert.equal(requests, 4);
   } finally { globalThis.fetch = original; }
 });
 
