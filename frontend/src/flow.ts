@@ -51,7 +51,9 @@ export interface Clue {
   deleted?: boolean;
   /** 사용자가 지정한 부분마스킹 범위, bbox 안의 0~1 상대 좌표. */
   maskBox?: Box;
+  /** 생성 패치 미리보기(브라우저). 적용 시에는 generationId 로 워커가 같은 패치를 합성한다. */
   generatedUrl?: string;
+  generationId?: string;
 }
 
 /** 이미지 재생성으로 한 번에 새로 그릴 영역: 이 사진에서 지우지 않았고 "그대로 두기"가 아닌 영역. */
@@ -78,6 +80,7 @@ export function generationBase(clues: Clue[], imageIndex: number, targetKeys: st
       deleted: false,
       maskBox: undefined,
       generatedUrl: undefined,
+      generationId: undefined,
     }));
 }
 
@@ -208,13 +211,24 @@ export function cluesFromReport(report: PostReport): Clue[] {
   );
 }
 
-/** transform 요청에 보낼 선택. 모든 단서를 보내고, 글을 고치지 않기로 했으면 글 단서는 skip. */
+/**
+ * transform 요청에 보낼 선택. 모든 단서를 보내고, 글을 고치지 않기로 했으면 글 단서는 skip.
+ * 사진 영역은 편집 상태(조절한 영역, 부분마스킹 범위, 생성 패치 ID, × 삭제=skip)를 함께 보낸다.
+ * 미리보기(renderPhoto)와 같은 규칙: 생성 전 regenerate 는 가림, 범위 없는 partialMask 는 보내지 않는다.
+ */
 export function choicesFor(clues: Clue[], applyText: boolean): Choice[] {
-  return clues.map((c) => ({
-    position: c.position,
-    idx: c.idx,
-    action: c.kind === "text" && !applyText ? "skip" : c.action,
-  }));
+  return clues.map((c) => {
+    if (c.kind === "text") return { position: c.position, idx: c.idx, action: applyText ? c.action : "skip" };
+    if (c.kind !== "image") return { position: c.position, idx: c.idx, action: c.action };
+    const choice: Choice = { position: c.position, idx: c.idx, action: c.deleted ? "skip" : c.action };
+    if (choice.action === "regenerate" && !c.generationId) choice.action = "mask";
+    if (choice.action === "partialMask" && !c.maskBox) throw new Error("부분마스킹할 범위를 사진에서 지정해 주세요.");
+    if (choice.action === "skip") return choice;
+    if (c.bbox) choice.bbox = [...c.bbox] as Box;
+    if (choice.action === "partialMask" && c.maskBox) choice.mask_box = [...c.maskBox] as Box;
+    if (choice.action === "regenerate" && c.generationId) choice.generation_id = c.generationId;
+    return choice;
+  });
 }
 
 /** 두 영역이 얼마나 겹치는지 (0~1). */
