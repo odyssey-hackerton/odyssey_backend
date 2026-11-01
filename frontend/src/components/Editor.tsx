@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ACTION_LABEL, ALLOWED_ACTIONS, CATEGORY_LABEL, generationBase, generationTargets, regionLetters, type Clue, type EditAction } from "../flow";
+import { ACTION_LABEL, ALLOWED_ACTIONS, CATEGORY_LABEL, generationBase, generationTargets, regionLetters, rejectEdit, type Clue, type EditAction } from "../flow";
 import { renderPhoto, type Photo } from "../media";
 import { Filmstrip } from "./Analysis";
 import Icon, { type IconName } from "./Icon";
@@ -34,6 +34,7 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
   const [preview, setPreview] = useState<string>();
   const [rendering, setRendering] = useState(false);
   const [error, setError] = useState("");
+  const [rejected, setRejected] = useState("");
   const [confirmed, setConfirmed] = useState<boolean[]>(() => photos.map(() => false));
   const top = useRef<HTMLFieldSetElement>(null);
   const photo = photos[photoIndex];
@@ -70,12 +71,16 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
   }, [photo, regionKey]);
 
   function change(key: string, patch: Partial<Clue>) {
+    const clue = clues.find((c) => c.key === key);
+    const reason = clue && rejectEdit(clue, patch);
+    if (reason) { setRejected(reason); return; }
+    setRejected("");
     setConfirmed((all) => all.map((v, i) => i === photoIndex ? false : v));
     onChange(key, patch);
   }
   function openPhoto(i: number) {
     if (i === photoIndex) return;
-    setPhotoIndex(i); setSelected(undefined); setPreviewing(false); setPreview(undefined);
+    setPhotoIndex(i); setSelected(undefined); setRejected(""); setPreviewing(false); setPreview(undefined);
   }
   const nextPending = photos.findIndex((_, i) => i !== photoIndex && !confirmed[i]);
   function finishPhoto() {
@@ -181,6 +186,7 @@ export default function Editor({ photos, clues, textClueCount, onChange, onReset
           {fileClues.length > 0 && <li><Icon name="check" size={15} />사진 파일 정보(촬영 위치·기기)는 적용할 때 자동으로 지워요.</li>}
           {textClueCount > 0 && <li><Icon name="info" size={15} />편집이 끝나면 글에서 찾은 단서 {textClueCount}개를 가린 글을 적용할지 물어볼게요.</li>}
         </ul>}
+        {rejected && <p className="editor-warning" role="alert">{rejected}</p>}
         {error && <p className="editor-warning" role="alert">{error}</p>}
         <div className="control-footer two">
           <button className="button secondary" disabled={!photo} onClick={() => setPreviewing((v) => !v)}>
