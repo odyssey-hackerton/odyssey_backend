@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getGenerationStatus, regenerateBackgrounds } from "../api";
+import { getGenerationStatus, regenerateBackgrounds, type Generated } from "../api";
 import type { Box } from "../flow";
 import Icon from "./Icon";
 
@@ -11,7 +11,7 @@ export default function ImageRegeneration({ prepareImage, boxes, labels, attempt
   disabled: boolean;
   demo: boolean;
   onAttempt: () => void;
-  onGenerated: (blobs: Blob[]) => void;
+  onGenerated: (results: Generated[]) => void;
   onBusy: (busy: boolean) => void;
 }) {
   const [enabled, setEnabled] = useState(false);

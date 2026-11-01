@@ -230,3 +230,119 @@ async def test_upload_registration_failure_discards_original(monkeypatch, failur
     with pytest.raises((RuntimeError, HTTPException)):
         await jobs.create_job(session, redis, storage, Settings(), file=upload())
     storage.delete.assert_awaited_once_with(storage.put.call_args.args[0])
+
+
+# ---------------------------------------------------------------- 에이전트3 정책 (choices 확장)
+def policy_job(monkeypatch, findings):
+    job = SimpleNamespace(
+        id=uuid.uuid4(),
+        execution_id=uuid.uuid4(),
+        input_sha256=hashlib.sha256(REAL_PNG).hexdigest(),
+        status=JobStatus.AWAITING_USER,
+        input_type="image",
+        object_key="originals/test.png",
+        result=SimpleNamespace(findings=findings),
+    )
+    monkeypatch.setattr(jobs, "_get_job", AsyncMock(return_value=job))
+    monkeypatch.setattr(jobs, "set_progress", AsyncMock())
+    enqueue = AsyncMock()
+    monkeypatch.setattr(jobs, "enqueue_job", enqueue)
+    return job, enqueue
+
+
+def real_png():
+    from io import BytesIO as _B
+
+    from PIL import Image
+
+    out = _B()
+    Image.new("RGB", (100, 80), "white").save(out, format="PNG")
+    return out.getvalue()
+
+
+REAL_PNG = real_png()
+FACE = {
+    "type": "face",
+    "source": "vlm",
+    "title": "얼굴",
+    "category": "object",
+    "bbox": [20, 20, 60, 40],
+    "action": "mask",
+    "policy": {
+        "level": "high",
+        "allowed_actions": ["mask", "blur", "mosaic"],
+        "anchor_bbox": [20, 20, 60, 40],
+        "allow_shrink": False,
+        "allow_delete": False,
+        "allow_partial": False,
+    },
+}
+SIGN = {
+    "type": "store_name",
+    "source": "vlm",
+    "title": "간판",
+    "category": "location",
+    "bbox": [70, 50, 90, 70],
+    "action": "mask",
+    "policy": {
+        "level": "medium",
+        "allowed_actions": ["mask", "regenerate"],
+        "anchor_bbox": [70, 50, 90, 70],
+        "allow_shrink": True,
+        "allow_delete": True,
+        "allow_partial": True,
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("choices", "message"),
+    [
+        ('[{"idx":0,"action":"skip"}]', "그대로 둘 수 없어요"),
+        ('[{"idx":0,"action":"mask","bbox":[25,22,60,40]}]', "작게 줄일 수 없어요"),
+        ('[{"idx":0,"action":"partialMask","mask_box":[0,0,0.5,1]}]', "쓸 수 없어요"),
+        ('[{"idx":0,"action":"mask","bbox":[0,0,500,40]}]', "사진 범위"),
+        ('[{"idx":1,"action":"regenerate","bbox":[70,50,90,70]}]', "먼저 생성"),
+        ('[{"idx":1,"action":"regenerate","generation_id":"dead"}]', "만료"),
+        ('[{"idx":1,"action":"blur"}]', "쓸 수 없어요"),
+    ],
+)
+async def test_edits_weaker_than_agent3_policy_are_rejected_before_enqueue(
+    monkeypatch, choices, message
+):
+    job, enqueue = policy_job(monkeypatch, [FACE, SIGN])
+    redis = AsyncMock(get=AsyncMock(return_value=None), exists=AsyncMock(return_value=0))
+    with pytest.raises(HTTPException) as error:
+        await jobs.submit_transform(
+            job.id,
+            AsyncMock(),
+            redis,
+            Settings(),
+            AsyncMock(),
+            choices=choices,
+            file=upload(REAL_PNG),
+        )
+    assert error.value.status_code == 422 and message in error.value.detail
+    enqueue.assert_not_called()
+
+
+async def test_allowed_edits_carry_geometry_and_generation_into_the_queue(monkeypatch):
+    job, enqueue = policy_job(monkeypatch, [FACE, SIGN])
+    redis = AsyncMock(get=AsyncMock(return_value=None), exists=AsyncMock(return_value=1))
+    choices = (
+        '[{"idx":0,"action":"blur","bbox":[10,10,70,50]},'
+        '{"idx":1,"action":"regenerate","bbox":[65,45,95,75],"generation_id":"ab12"}]'
+    )
+    await jobs.submit_transform(
+        job.id, AsyncMock(), redis, Settings(), AsyncMock(), choices=choices, file=upload(REAL_PNG)
+    )
+    message = enqueue.call_args.args[2]
+    first, second = message.user_choices
+    assert (first.action, first.bbox) == ("blur", [10, 10, 70, 50])
+    assert (second.action, second.generation_id, second.bbox) == (
+        "regenerate",
+        "ab12",
+        [65, 45, 95, 75],
+    )
+    assert message.initial_findings[0].model_dump()["policy"]["level"] == "high"
+    redis.exists.assert_awaited_once_with("generation:ab12")

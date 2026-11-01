@@ -1,12 +1,12 @@
 """게시물(post) API 스키마. 게시물 = 사진 최대 4장 + 글. 사진마다 작업(job)이 하나씩 붙는다."""
 
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from app.schemas.contract import InputType
-from app.schemas.jobs import JOB_ID_EXAMPLE, STATUS_DESCRIPTION
+from app.schemas.jobs import JOB_ID_EXAMPLE, STATUS_DESCRIPTION, UserChoiceIn
 
 POST_ID_EXAMPLE = "9a1c4e2b-7d3f-4b6a-8e10-2c5d7f9b1a34"
 POSITION_DESCRIPTION = (
@@ -74,7 +74,9 @@ class PostItemReport(PostItem):
         description=(
             "탐지 항목. 분석 단계(`AWAITING_USER`)에서는 사용자에게 보여 줄 단서 목록이고, "
             "`DONE` 뒤에는 재검증에서 다시 찾은 단서 목록이다. 사진 영역은 `bbox`, 글 단서는 "
-            "`source: text`와 `spans`(글자 위치)를 가진다. 변환 요청의 `idx`는 이 배열의 인덱스다."
+            "`source: text`와 `spans`(글자 위치)를 가진다. 변환 요청의 `idx`는 이 배열의 인덱스다. "
+            "에이전트3이 붙이는 `category`(`text`|`object`|`location`, 편집 도구 분류), "
+            "`action`(추천), `policy`(허용 처리·축소/삭제 가능 여부)도 포함된다."
         ),
         examples=[
             [
@@ -107,15 +109,10 @@ class PostReportOut(BaseModel):
     items: list[PostItemReport] = Field(description="항목별 리포트 (순서대로)")
 
 
-class PostChoiceIn(BaseModel):
-    """항목 하나의 탐지 항목 하나에 대한 처리 방법."""
+class PostChoiceIn(UserChoiceIn):
+    """항목 하나의 탐지 항목 하나에 대한 처리 방법 (영역·부분마스킹·생성 패치 포함)."""
 
     position: int = Field(ge=0, description=POSITION_DESCRIPTION, examples=[0])
-    idx: int = Field(ge=0, description="그 항목 리포트의 `findings` 인덱스", examples=[0])
-    action: Literal["blur", "mask", "remove", "skip"] = Field(
-        description="`blur`(흐리게) | `mask`(덮기) | `remove`(지우기) | `skip`(그대로 두기)",
-        examples=["blur"],
-    )
 
 
 class PostResultItem(PostItem):

@@ -1,7 +1,8 @@
 // 백엔드 게시물 API (/api/posts). Swagger: /docs
 //
-// 흐름: createPost → waitForPost(AWAITING_USER) → getPostReport → transformPost
+// 흐름: createPost → waitForPost(AWAITING_USER) → getPostReport → (편집) → transformPost
 //       → waitForPost(DONE) → getPostResult + getPostReport(재검증에서 남은 단서)
+// 편집 화면의 미리보기는 브라우저 Canvas 로 그리고, 적용 시 최종 픽셀은 AI 워커(에이전트3)가 같은 규칙으로 그린다.
 
 export type JobStatus =
   | "QUEUED"
@@ -65,7 +66,18 @@ export interface PostResult {
   items: { position: number; job_id: string; image_url: string | null }[];
 }
 
-export type Choice = { position: number; idx: number; action: string };
+/** transform 요청의 항목 하나. 편집 화면 상태(처리 방법·조절한 영역·부분마스킹·생성 패치)를 그대로 보낸다. */
+export type Choice = {
+  position: number;
+  idx: number;
+  action: string;
+  /** 모서리로 크기를 조절한 영역 (픽셀). 없으면 최초 탐지 영역 */
+  bbox?: [number, number, number, number];
+  /** partialMask: 영역 안의 상대 좌표 (0~1) */
+  mask_box?: [number, number, number, number];
+  /** regenerate: 생성 응답의 generation_ids / X-Generation-Id */
+  generation_id?: string;
+};
 
 export class ApiError extends Error {}
 
@@ -106,14 +118,17 @@ export const getPostResult = (id: string) => request<PostResult>(`/api/posts/${i
 export const getGenerationStatus = () =>
   request<{ enabled: boolean }>("/api/images/regenerate");
 
+export type Generated = { blob: Blob; generationId: string };
+
 /**
  * 보호 전처리가 끝난 사진과 여러 영역을 보내, AI 한 번 호출로 영역마다 새 배경을 받는다.
- * 게시물/분석 작업과 독립적이다. 결과는 영역 순서와 같다.
+ * 게시물/분석 작업과 독립적이다. 결과는 영역 순서와 같다. 서버가 패치를 보관하므로
+ * 적용할 때는 generationId 만 보내면 워커(에이전트3)가 같은 픽셀을 합성한다.
  */
 export async function regenerateBackgrounds(
   image: Blob,
   boxes: [number, number, number, number][],
-): Promise<Blob[]> {
+): Promise<Generated[]> {
   const form = new FormData();
   form.append("file", image, "edited.png");
   form.append("boxes", JSON.stringify(boxes));
@@ -129,15 +144,21 @@ export async function regenerateBackgrounds(
   }
   const body = await response.json().catch(() => null);
   const patches: unknown = body?.patches;
-  if (!Array.isArray(patches) || patches.length !== boxes.length || !patches.every((p) => typeof p === "string"))
+  const ids: unknown = body?.generation_ids;
+  const strings = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.length === boxes.length && v.every((p) => typeof p === "string" && p.length > 0);
+  if (!strings(patches) || !strings(ids))
     throw new ApiError("생성된 이미지 형식이 올바르지 않아요.");
-  return patches.map((p: string) => {
+  return patches.map((p, i) => {
     const bytes = Uint8Array.from(atob(p), (c) => c.charCodeAt(0));
-    return new Blob([bytes], { type: "image/png" });
+    return { blob: new Blob([bytes], { type: "image/png" }), generationId: ids[i] };
   });
 }
 
-/** 고른 처리 방법과, 처음 올린 원본 사진들(같은 순서)을 다시 보낸다. */
+/**
+ * 고른 처리 방법과, 처음 올린 원본 사진들(같은 순서)을 다시 보낸다.
+ * 최종 픽셀은 AI 워커(에이전트3)가 그리고 바로 재검증한다. 정책보다 약한 편집은 422 로 거절된다.
+ */
 export function transformPost(id: string, choices: Choice[], files: File[]) {
   const form = new FormData();
   form.append("choices", JSON.stringify(choices));

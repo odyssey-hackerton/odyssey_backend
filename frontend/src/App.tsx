@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createPost,
+  fetchImage,
   getPostReport,
+  getPostResult,
+  transformPost,
   waitForPost,
   type JobStatus,
 } from "./api";
-import { cluesFromFindings, cluesFromReport, maskText, type Clue } from "./flow";
+import { choicesFor, cluesFromFindings, cluesFromReport, maskText, type Clue } from "./flow";
 import { photoFromBlob, readPhoto, renderPhoto, validateFiles, type Photo } from "./media";
 import Analysis from "./components/Analysis";
 import Editor from "./components/Editor";
@@ -17,8 +20,9 @@ import TextReview from "./components/TextReview";
 import Verify from "./components/Verify";
 
 // 서버 게시물 API(/api/posts)로 동작한다.
-// 03: 게시물 등록 → AI ① 탐지 + ② 위험 분석 → 사용자 선택 대기
-// 04: 브라우저에서 편집한 최종 픽셀을 새 게시물 분석으로 재검증한다.
+// 03: 게시물 등록 → AI ① 탐지 + ② 위험 분석 + ③ 보호 정책 → 사용자 선택 대기
+// 04: 미리보기는 브라우저 Canvas. 적용하면 편집 상태(choices)와 원본을 /transform 으로 보내
+//     AI 워커(에이전트3)가 같은 규칙으로 최종 픽셀을 그리고 바로 재검증한다.
 // 06의 건너뛰기(03에서)는 서버를 거치지 않고 사진 파일 정보만 지운다.
 
 const STEPS = ["홈", "업로드", "분석 결과", "보호 편집", "재검증", "공유"];
@@ -195,14 +199,14 @@ export default function App() {
   function resetPhoto(imageIndex: number) {
     setClues((all) => all.map((c) => c.imageIndex === imageIndex ? {
       ...c, bbox: c.originalBox ?? c.bbox, action: c.recommended,
-      deleted: false, maskBox: undefined, generatedUrl: undefined,
+      deleted: false, maskBox: undefined, generatedUrl: undefined, generationId: undefined,
     } : c));
     setFurthest(3);
   }
-  function generatedRegion(key: string, blob: Blob) {
+  function generatedRegion(key: string, blob: Blob, generationId: string) {
     const generatedUrl = URL.createObjectURL(blob);
     objectUrls.current.add(generatedUrl);
-    changeRegion(key, { generatedUrl, action: "regenerate" });
+    changeRegion(key, { generatedUrl, generationId, action: "regenerate" });
   }
   function requestApply() {
     if (busy) return;
@@ -210,7 +214,7 @@ export default function App() {
     else void apply(false);
   }
 
-  // ---- 04 → 05: ③ 변환 + ② 재검증 ----
+  // ---- 04 → 05: ③ 변환(AI 워커·에이전트3) + ② 재검증 ----
   async function apply(useMaskedText: boolean) {
     setReviewing(false);
     setApplyText(useMaskedText);
@@ -225,23 +229,24 @@ export default function App() {
     }
     if (!postId) return;
     await run("보호를 적용하고 AI가 다시 확인하고 있어요", async (signal) => {
-      const loaded = await renderAll(photos, clues);
-      const caption = useMaskedText ? maskText(text.trim(), clues) : text.trim();
-      const issue = validateFiles(loaded.map((p) => p.file), 0);
-      if (issue) throw new Error(`편집 결과: ${issue}`);
-      let remaining: Clue[] = [];
-      let after: number | null = null;
-      if (loaded.length || caption) {
-        const { post_id } = await createPost(loaded.map((p) => p.file), caption);
-        await settle(post_id, signal);
-        const report = await getPostReport(post_id);
-        remaining = cluesFromReport(report).filter((c) => c.kind !== "file");
-        after = report.risk_before;
-      }
+      // 편집 상태(처리 방법·영역·부분마스킹·생성 패치)와 원본을 보내면 워커가 최종 픽셀을 그린다.
+      await transformPost(postId, choicesFor(clues, useMaskedText), photos.map((p) => p.file));
+      await settle(postId, signal);
+      const [result, report] = await Promise.all([getPostResult(postId), getPostReport(postId)]);
+      const loaded = await Promise.all(
+        result.items
+          .filter((item) => item.image_url)
+          .map(async (item, i) => track(await readPhoto(await fetchImage(item.image_url!, `odyssey-${i + 1}`)))),
+      );
       if (signal.aborted) return;
+      const caption = result.text ?? (useMaskedText ? maskText(text.trim(), clues) : text.trim());
       setOutputs(loaded);
       setOutputText(caption);
-      setVerification({ before: initialRisk, after, remaining });
+      setVerification({
+        before: initialRisk,
+        after: report.risk_after,
+        remaining: cluesFromReport(report).filter((c) => c.kind !== "file"),
+      });
       go(4);
     });
   }

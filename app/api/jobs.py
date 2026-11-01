@@ -37,6 +37,7 @@ from app.schemas.contract import (
     JobOptions,
     JobStatus,
     UserChoice,
+    generation_key,
 )
 from app.schemas.jobs import (
     ErrorOut,
@@ -47,7 +48,8 @@ from app.schemas.jobs import (
     TransformRequest,
     UserChoiceIn,
 )
-from app.services.uploads import ImageType, detect_image_type
+from app.services.policy import check_choice
+from app.services.uploads import ImageType, detect_image_type, image_size
 from app.storage.s3 import original_key
 
 logger = logging.getLogger(__name__)
@@ -389,6 +391,23 @@ async def _check_transform(
     indices = [choice.idx for choice in choices]
     if len(set(indices)) != len(indices) or any(i >= len(job.result.findings) for i in indices):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid finding indices")
+    # 에이전트3 정책보다 약한 편집(고위험 항목 축소·삭제·부분마스킹 등)은 큐에 넣지 않는다.
+    size = await asyncio.to_thread(image_size, image[0]) if image is not None else None
+    for choice in choices:
+        check_choice(
+            job.result.findings[choice.idx],
+            choice.action,
+            bbox=choice.bbox,
+            mask_box=choice.mask_box,
+            generation_id=choice.generation_id,
+            image_size=size,
+        )
+        if choice.action == "regenerate" and not await redis.exists(
+            generation_key(choice.generation_id or "")
+        ):
+            raise HTTPException(
+                422, "생성한 이미지가 만료됐어요. 다시 생성하거나 다른 방식을 골라 주세요"
+            )
 
     has_image = job.input_type in ("image", "image_text")
     if has_image and (image is None or not job.input_sha256):
@@ -432,7 +451,7 @@ async def _start_transform(
             await _discard_upload(storage, object_key)
             raise HTTPException(503, "사진 저장에 실패했습니다") from None
 
-    user_choices = [UserChoice(idx=c.idx, action=c.action) for c in choices]
+    user_choices = [UserChoice(**c.model_dump()) for c in choices]
     message = JobMessage(
         job_id=job_id,
         execution_id=execution_id,
