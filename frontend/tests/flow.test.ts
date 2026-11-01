@@ -7,6 +7,7 @@ import {
   maskText,
   matchKept,
   regionLetters,
+  rejectEdit,
 } from "../src/flow.ts";
 
 const report: PostReport = {
@@ -183,4 +184,23 @@ test("image regeneration covers every region of the photo at once, except delete
     { ...base, key: "t", kind: "text" as const, imageIndex: null, action: "mask" as const },
   ];
   assert.deepEqual(generationTargets(clues, 0).map((c) => c.key), ["0:0", "0:1", "0:2"]);
+});
+
+test("rejectEdit blocks weakening edits only on high-risk regions", () => {
+  const base = {
+    key: "0:0", position: 0, idx: 0, imageIndex: 0, kind: "image", type: "plate", title: "번호판",
+    description: "", bbox: [10, 10, 50, 40], originalBox: [10, 10, 50, 40],
+    recommended: "mask", action: "mask", category: "text",
+  } as const;
+  const high = { ...base, risk: "high" as const, bbox: [...base.bbox] as [number, number, number, number], originalBox: [...base.originalBox] as [number, number, number, number] };
+  const medium = { ...high, risk: "medium" as const };
+
+  assert.match(rejectEdit(high, { deleted: true, action: "skip" }) ?? "", /삭제/);
+  assert.match(rejectEdit(high, { action: "skip" }) ?? "", /그대로/);
+  assert.match(rejectEdit(high, { action: "partialMask" }) ?? "", /부분마스킹/);
+  assert.match(rejectEdit(high, { bbox: [12, 12, 48, 38] }) ?? "", /줄일 수 없어요/);
+  assert.equal(rejectEdit(high, { bbox: [5, 5, 55, 45] }), undefined);
+  assert.equal(rejectEdit(high, { action: "blur" }), undefined);
+  assert.equal(rejectEdit(medium, { deleted: true, action: "skip" }), undefined);
+  assert.equal(rejectEdit(medium, { bbox: [12, 12, 48, 38] }), undefined);
 });

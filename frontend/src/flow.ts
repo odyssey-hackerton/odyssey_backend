@@ -197,6 +197,25 @@ export function resizeBox(box: Box, dx: number, dy: number, width: number, heigh
   return scaleBox(box, 1 + 2 * (sx * dx * w + sy * dy * h) / (w * w + h * h), width, height);
 }
 
+/**
+ * 위험도 높은 영역에서 보호를 약하게 만드는 편집이면 거절 사유를 돌려준다. 허용이면 undefined.
+ * 막는 것: 영역 삭제, 그대로 두기, 부분마스킹, 원래 범위보다 작게 줄이기.
+ */
+export function rejectEdit(clue: Clue, patch: Partial<Clue>): string | undefined {
+  if (clue.risk !== "high") return undefined;
+  if (patch.deleted) return "위험도가 높은 영역은 삭제할 수 없어요.";
+  if (patch.action === "skip") return "위험도가 높은 영역은 그대로 둘 수 없어요.";
+  if (patch.action === "partialMask") return "위험도가 높은 영역은 부분마스킹할 수 없어요. 영역 전체를 가려 주세요.";
+  const base = clue.originalBox;
+  const next = patch.bbox;
+  if (base && next) {
+    const eps = 0.5;
+    const shrinks = next[0] > base[0] + eps || next[1] > base[1] + eps || next[2] < base[2] - eps || next[3] < base[3] - eps;
+    if (shrinks) return "위험도가 높은 영역은 처음 범위보다 줄일 수 없어요.";
+  }
+  return undefined;
+}
+
 /** 게시물 리포트 전체를 단서로. 사진이 있는 항목은 position 이 곧 사진 번호다. */
 export function cluesFromReport(report: PostReport): Clue[] {
   return report.items.flatMap((item) =>
