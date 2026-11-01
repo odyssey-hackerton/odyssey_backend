@@ -405,7 +405,9 @@ async def transform_post(
     plan = []
     for job in jobs:
         mine = [
-            UserChoiceIn(idx=c.idx, action=c.action) for c in parsed if c.position == job.position
+            UserChoiceIn(**c.model_dump(exclude={"position"}))
+            for c in parsed
+            if c.position == job.position
         ]
         image = images.get(job.position)
         text = await job_api._check_transform(redis, job, mine, image)

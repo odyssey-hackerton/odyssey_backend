@@ -137,12 +137,40 @@ class JobReportOut(BaseModel):
     )
 
 
+EditAction = Literal["mask", "blur", "mosaic", "partialMask", "remove", "regenerate", "skip"]
+ACTION_DESCRIPTION = (
+    "`mask`(가림) | `blur`(블러) | `mosaic`(모자이크) | "
+    "`partialMask`(부분마스킹, `mask_box` 필요) | `remove`(텍스트제거·인페인팅) | "
+    "`regenerate`(이미지재생성, `generation_id` 필요) | "
+    "`skip`(그대로 두기 / × 삭제). 글 단서는 `mask` `remove` `skip` 만. "
+    "에이전트3 정책(리포트 findings 의 `policy`)보다 약한 선택은 422 로 거절된다."
+)
+
+
 class UserChoiceIn(BaseModel):
-    """사용자가 선택한 탐지 항목 처리 방법."""
+    """사용자가 선택한 탐지 항목 처리 방법. 편집 화면의 상태를 그대로 보낸다."""
 
     idx: int = Field(ge=0, description="findings 리스트 인덱스")
-    action: Literal["blur", "mask", "remove", "skip"] = Field(
-        description="`blur` | `mask` | `remove` | `skip`", examples=["blur"]
+    action: EditAction = Field(description=ACTION_DESCRIPTION, examples=["blur"])
+    bbox: list[float] | None = Field(
+        default=None,
+        min_length=4,
+        max_length=4,
+        description="모서리로 크기를 조절한 영역 [x1, y1, x2, y2] (픽셀). 없으면 최초 탐지 영역",
+        examples=[[30, 50, 330, 120]],
+    )
+    mask_box: list[float] | None = Field(
+        default=None,
+        min_length=4,
+        max_length=4,
+        description="`partialMask`: 영역 안의 상대 좌표 [x1, y1, x2, y2] (0~1)",
+        examples=[[0.25, 0, 0.75, 1]],
+    )
+    generation_id: str | None = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[0-9a-f]+$",
+        description="`regenerate`: `POST /api/images/regenerate` 응답 헤더 `X-Generation-Id` 값",
     )
 
 
