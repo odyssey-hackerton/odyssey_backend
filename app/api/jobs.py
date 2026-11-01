@@ -243,7 +243,7 @@ async def create_job(
     `DONE`이 되면 `/result`와 `/report`를 조회한다.
 
     ```bash
-    curl -X POST http://10.1.1.27/api/jobs -F file=@photo.jpg -F "text=본문 내용"
+    curl -X POST https://10.1.1.27/api/jobs -F file=@photo.jpg -F "text=본문 내용"
     ```
     """
     if text is not None and not text.strip():
@@ -342,7 +342,7 @@ async def job_events(
     끝날 때까지 응답이 보이지 않을 수 있으니 curl로 확인한다.
 
     ```bash
-    curl -N http://10.1.1.27/api/jobs/{job_id}/events
+    curl -N https://10.1.1.27/api/jobs/{job_id}/events
     ```
     """
     await _get_job(session, job_id)
@@ -504,7 +504,7 @@ async def submit_transform(
     목록에 없는 항목은 AI가 추천한 action을 그대로 사용한다.
 
     ```bash
-    curl -X POST http://10.1.1.27/api/jobs/{job_id}/transform \\
+    curl -X POST https://10.1.1.27/api/jobs/{job_id}/transform \\
          -F file=@photo.jpg \\
          -F 'choices=[{"idx": 0, "action": "blur"}]'
     ```

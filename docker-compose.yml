@@ -1,5 +1,5 @@
 # 서버 구성: Docker Hub 이미지만 받아 실행한다 (소스 불필요).
-# 서버에는 이 파일, .env, litellm/config.yaml, litellm/.env가 필요하다.
+# 서버에는 이 파일, .env, certs/, litellm/config.yaml, litellm/.env가 필요하다.
 #
 #   배포:  docker compose --env-file .env --env-file litellm/.env up -d
 #   롤백:  .env 의 IMAGE_TAG 를 이전 태그로 바꾸고 위 명령 다시 실행
@@ -23,6 +23,15 @@ services:
       - /tmp:size=128m,mode=1777
     ports:
       - "${HTTP_PORT:-80}:80"
+      - "443:443"
+    volumes:
+      # scripts/make-cert.sh 로 만든 cert.pem, key.pem. 없으면 시작하지 않는다.
+      - type: bind
+        source: ./certs
+        target: /etc/nginx/certs
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       api:
         condition: service_healthy

@@ -64,7 +64,7 @@ DESCRIPTION = """
 FastAPI 기본 검증 오류(422, `detail`이 배열)가 돌아옵니다.
 
 ## 주소
-- 서버: `http://10.1.1.27` (VPN 연결 필요, HTTP만 사용)
+- 서버: `https://10.1.1.27` (VPN 연결 필요, mkcert 인증서. 접속 PC에 루트 CA 설치)
 - 문서: `/docs`(Swagger), `/redoc`
 """
 

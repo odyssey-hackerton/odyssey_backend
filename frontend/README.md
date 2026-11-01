@@ -8,7 +8,7 @@ Node.js 20 이상.
 
 ```sh
 npm ci
-VITE_API_TARGET=http://10.1.1.27 npm run dev
+VITE_API_TARGET=https://10.1.1.27 npm run dev
 npm run dev
 ```
 
