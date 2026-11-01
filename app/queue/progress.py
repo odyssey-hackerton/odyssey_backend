@@ -9,6 +9,14 @@ from datetime import UTC, datetime
 from redis.asyncio import Redis
 
 
+def text_cache_key(job_id: str) -> str:
+    """원본 글 임시 보관 키. 변환(Phase 2) 때 다시 쓰고, 작업이 끝나면 지운다.
+
+    DB에는 저장하지 않는다.
+    """
+    return f"text:{job_id}"
+
+
 def progress_key(job_id: str) -> str:
     return f"job:{job_id}"
 

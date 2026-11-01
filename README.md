@@ -6,7 +6,7 @@
 - **PostgreSQL**: 작업·결과 메타데이터
 - **Redis**: 작업 큐(`jobs`), 결과 큐(`results`), 진행 상태(`job:{id}`)
 - **AWS S3**: 원본·결과 이미지
-- **React 프론트** (`frontend/`): 사진·글 업로드, 진행 단계 표시, 처리 전후 비교
+- **React 프론트** (`frontend/`): 6단계 보호 편집 화면. 게시물 API(`/api/posts`)를 쓴다
 - **Nginx**: 프론트 서빙, `/api` 리버스 프록시
 - **LiteLLM**: LLM/VLM 프록시·폴백, 관리자 UI, 키별 토큰·비용 관리 ([설정](#litellm-프록시))
 - **Mock 워커**: 실제 AI 워커 없이 전체 흐름을 개발·시연하기 위한 가짜 워커
@@ -22,19 +22,18 @@ uv sync
 uv run ruff check . && uv run ruff format --check . && uv run pytest
 ```
 
-프론트 (Node.js 20 이상). 화면만 고칠 때는 서버의 API에 붙여서 개발하면 됩니다.
-
-6단계 React 테스트 UI의 데모/API 모드와 실행 절차는 [frontend/README.md](frontend/README.md), 화면별 API 현황과 추가 계획은 [docs/ui-api-plan.md](docs/ui-api-plan.md)를 참고하세요.
+프론트 (Node.js 20 이상). 화면 흐름과 API 연결은 [frontend/README.md](frontend/README.md)를 참고하세요. 화면만 고칠 때는 서버의 API에 붙여서 개발하면 됩니다.
 
 ```bash
 cd frontend
 npm install
-VITE_API_TARGET=http://10.1.1.27 npm run dev   # 서버 API 사용 (VPN 연결 필요), http://localhost:5173
+VITE_API_TARGET=https://10.1.1.27 npm run dev   # 서버 API 사용 (VPN 필요), http://localhost:5173
 npm run dev                                     # 로컬 백엔드(localhost:8000) 사용
-npm run build                                   # 타입 검사 + 빌드 확인
+npm test
+npm run build   # 타입 검사 + 빌드 확인
 ```
 
-`/api` 요청은 개발 서버가 백엔드로 넘겨 주므로 CORS 설정이 필요 없습니다. 배포 때는 `odyssey-web` 이미지를 빌드하면서 React도 함께 빌드됩니다.
+배포 때는 `odyssey-web` 이미지를 빌드하면서 React도 함께 빌드됩니다.
 
 서버와 같은 구성으로 띄워 보려면 이미지를 빌드·푸시한 뒤(아래 2번) 로컬에서도 `.env`와 `litellm/.env`를 채우고 `docker compose --env-file .env --env-file litellm/.env up -d`를 실행하면 됩니다. 전체 흐름 확인에는 별도로 실행한 AI 워커가 필요합니다. 업로드 → 진행 이벤트 → 결과 이미지 → 리포트 확인:
 
@@ -93,7 +92,7 @@ Apple Silicon Mac에서도 서버용 `linux/amd64`로 빌드됩니다. Docker Hu
 
 ### 3. 서버 준비 (한 번만)
 
-Docker는 [공식 문서의 Ubuntu apt 저장소 방식](https://docs.docker.com/engine/install/ubuntu/)으로 설치하고, `sudo usermod -aG docker $USER` 후 다시 접속합니다. 서버에는 `docker-compose.yml`, 앱 `.env`, `litellm/config.yaml`, `litellm/.env`가 필요합니다. LiteLLM 환경 파일은 아래 [설정 절차](#litellm-프록시)를 따라 준비합니다.
+Docker는 [공식 문서의 Ubuntu apt 저장소 방식](https://docs.docker.com/engine/install/ubuntu/)으로 설치하고, `sudo usermod -aG docker $USER` 후 다시 접속합니다. 서버에는 `docker-compose.yml`, 앱 `.env`, `certs/`(HTTPS 인증서), `litellm/config.yaml`, `litellm/.env`가 필요합니다. 인증서는 아래 [HTTPS 인증서](#https-인증서-한-번만) 절차로 만듭니다. LiteLLM 환경 파일은 아래 [설정 절차](#litellm-프록시)를 따라 준비합니다.
 
 ```bash
 # 로컬에서
@@ -114,12 +113,35 @@ vi .env
 | `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | 버킷 이름, API 서버용 IAM 키 |
 | `COMPOSE_PROFILES` | AI 워커가 붙기 전까지 `mock`, 붙으면 줄 삭제 |
 
+#### HTTPS 인증서 (한 번만)
+
+사설 IP는 Let's Encrypt 등 공인 CA가 발급하지 않으므로 [mkcert](https://github.com/FiloSottile/mkcert) 인증서를 씁니다. Nginx가 443에서 HTTPS를 처리하고 80은 HTTPS로 돌려보냅니다. 파일 공유(Web Share)는 HTTPS에서만 동작합니다.
+
+1. 인증서 만들기 (로컬 PC, 한 번만. 유효기간 약 2년)
+
+   ```bash
+   brew install mkcert                 # macOS
+   ./scripts/make-cert.sh 10.1.1.27    # 서버 사설 IP. 이 PC에는 루트 CA가 자동 설치됨
+   ssh -p <SSH포트> <사용자>@<서버주소> 'mkdir -p ~/odyssey/certs'
+   scp -P <SSH포트> certs/cert.pem certs/key.pem <사용자>@<서버주소>:~/odyssey/certs/
+   ```
+
+2. 접속할 다른 PC에 `certs/rootCA.pem` 설치 (안 하면 브라우저 경고)
+   - macOS: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain rootCA.pem`
+   - Windows: 파일 이름을 `rootCA.crt`로 바꿔 더블클릭 → 인증서 설치 → 로컬 컴퓨터 → "신뢰할 수 있는 루트 인증 기관"
+   - Firefox는 OS 저장소를 안 쓸 수 있어 설정 → 인증서 → 가져오기
+   - 휴대폰 시연 시: 파일을 보내 프로필/인증서로 설치 후 iOS는 설정 → 일반 → 정보 → 인증서 신뢰 설정에서 켭니다.
+
+3. NCP ACG에서 VPN 대역 → TCP 443 인바운드를 허용합니다.
+
+`rootCA.pem`은 공개 인증서라 팀원에게 보내도 됩니다. 루트 CA **개인키**(`mkcert -CAROOT` 폴더의 `rootCA-key.pem`)는 만든 PC 밖으로 내보내지 않습니다. 서버 IP가 바뀌면 1번을 다시 실행합니다.
+
 ### 4. 배포·롤백 (서버)
 
 ```bash
 cd ~/odyssey
 docker compose --env-file .env --env-file litellm/.env pull && docker compose --env-file .env --env-file litellm/.env up -d
-curl "http://localhost/api/health?deep=true"   # db, redis, s3 모두 true면 정상
+curl -k "https://localhost/api/health?deep=true"   # db, redis, s3 모두 true면 정상 (-k: 인증서가 localhost가 아니라 사설 IP용)
 ```
 
 롤백은 `.env`의 `IMAGE_TAG`를 이전 태그로 바꾸고 같은 명령을 실행합니다. DB 마이그레이션은 API 컨테이너가 시작할 때 자동으로 적용됩니다.
@@ -307,7 +329,31 @@ docker compose --env-file .env --env-file litellm/.env stop litellm litellm-db
 
 ## API
 
-자세한 요청·응답 형식과 예시는 Swagger 문서(`http://10.1.1.27/docs`)에 있습니다.
+자세한 요청·응답 형식과 예시는 Swagger 문서(`https://10.1.1.27/docs`)에 있습니다.
+
+웹 화면은 **게시물 API**를 씁니다. 게시물 = 사진 최대 4장 + 글이고, 서버가 사진마다 작업(job)을 하나씩 만들어 묶습니다. 글은 0번 사진 작업과 함께 분석됩니다. AI 워커와의 메시지 형식은 바뀌지 않습니다.
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/posts` | `files`(사진 0~4장, 순서 = `position`) + `text`. 모든 사진을 먼저 검사하고 사진마다 작업 생성. `202` + `post_id` |
+| `GET` | `/api/posts/{id}` | 전체 상태(가장 늦은 항목 기준)와 항목별 상태 |
+| `GET` | `/api/posts/{id}/events` | SSE. `progress`, 모두 분석이 끝나면 `awaiting_user`, 끝나면 `done` |
+| `GET` | `/api/posts/{id}/report` | 항목별 단서(`findings`)와 위험도. 분석 단계와 완료 후(재검증에서 남은 단서) 모두 조회 |
+| `POST` | `/api/posts/{id}/transform` | `choices`(`[{position, idx, action}]`) + 처음 올린 원본 사진들(같은 순서). 모든 항목을 확인한 뒤에 시작 |
+| `GET` | `/api/posts/{id}/result` | 처리된 글과 항목별 결과 사진 주소(`/api/jobs/{job_id}/image`) |
+| `GET` | `/api/jobs/{id}/image` | 결과 사진을 서버를 거쳐 내려줌. 같은 주소라 S3 CORS 설정 없이 공유·다운로드 가능 |
+
+공유는 `x-api-test`에서 확인한 Web Share 방식입니다. 현재 프론트는 브라우저에서 완성한
+사진 파일과 본문을 미리 준비하고, 버튼 클릭 시 `navigator.share({ files, text })`로 전달합니다.
+사용자가 공유 시트에서 X를 고르고 글쓰기 화면에서 최종 게시합니다.
+X API 키나 OAuth 설정은 필요 없습니다. 기존 서버 변환 클라이언트는 모든 항목이
+`DONE`이면 `/api/posts/{id}/result`로 결과를 받습니다.
+
+결과가 누락되면 `/result`는 `404`로 응답해 일부 사진만 공유되는 것을 막습니다.
+사진 다운로드는 S3 파일이 없으면 `404`, 저장소 연결·권한 오류면 `503`입니다.
+실제 기기 확인 절차는 [프론트 README](frontend/README.md)를 참고하세요.
+
+사진 1장 단위로 쓰는 작업 API도 그대로 있습니다.
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
@@ -316,6 +362,7 @@ docker compose --env-file .env --env-file litellm/.env stop litellm litellm-db
 | `GET` | `/api/jobs/{id}/events` | SSE. 상태가 바뀔 때마다 `progress`, 끝나면 `done` 이벤트 |
 | `GET` | `/api/jobs/{id}/result` | 이미지: presigned URL(5분), 글: 가린 글, 사진 + 글: 둘 다. 완료 전이면 `409` |
 | `GET` | `/api/jobs/{id}/report` | 위험도 전후, 탐지 항목, 반복 횟수 |
+| `POST` | `/api/jobs/{id}/transform` | 사용자 선택(`choices`) + 원본 사진으로 변환 시작 |
 | `GET` | `/api/health` | DB·Redis 확인. `?deep=true`면 S3까지 |
 
 입력 종류(`input_type`)는 보낸 필드로 정해집니다. `file`만 보내면 `image`, `text`만 보내면 `text`, 둘 다 보내면 `image_text`입니다. `image_text`는 사진과 글(예: 게시물 사진과 본문)을 AI가 한 작업에서 함께 분석하고, 결과도 처리된 이미지와 가린 글을 함께 돌려줍니다.
@@ -380,3 +427,12 @@ v1 작업/워커와 혼용하지 않는다. 이전 작업에는 파일 해시가
 Compose는 API의 임시 업로드 파일과 Nginx 업로드 버퍼를 `/tmp` tmpfs에 둔다.
 Compose 밖에서 실행할 때는 별도 메모리 임시 디렉터리가 필요하다.
 현재 Gemini 호출은 외부 서비스 전송이므로 S3 삭제가 외부 서비스 삭제를 보장하지 않는다.
+
+
+### 브라우저 보호 편집과 Gemini 배경 재생성
+
+일반 보호 편집은 프론트 Canvas에서 실행하고(텍스트제거는 필요할 때 로드하는 OpenCV.js 인페인팅),, 최종 PNG를 기존 게시물 분석 API로 재검증합니다. 기존 transform API/워커 계약은 유지됩니다. UI 상세와 동작 검증은 [frontend/README.md](frontend/README.md)를 참고하세요.
+
+배경 재생성은 게시물·분석 작업에서 분리한 API `GET/POST /api/images/regenerate`를 사용합니다. GET은 키 설정 여부만 반환하고 POST는 전처리된 사진(`file`)과 영역 좌표를 받아 Gemini를 호출합니다. 영역 하나는 `bbox`(응답 PNG), 여러 영역은 `boxes`(최대 20개, 응답 `{"patches": [base64 PNG, ...]}`)로 보내며 `boxes`는 AI를 한 번만 호출합니다. 화면은 사진 한 장의 영역을 `boxes`로 한 번에 보냅니다. 게시물 ID·DB 조회·큐 작업은 필요 없습니다. 전처리는 호출자 책임이며, 현재 화면은 AI가 처음 추천한 보호 처리본을 전달합니다. 사용자가 바꾼 편집은 들어가지 않습니다. 버튼은 보호 편집 화면의 사진 바로 아래에 있고, 텍스트·객체·간접위치 모든 영역에서 쓸 수 있습니다. API 서버 `.env`의 `GEMINI_API_KEY`, `GEMINI_IMAGE_MODEL` 설정이 필요합니다. DB 스키마 변경·마이그레이션·Redis 카운터는 없습니다. 최초 1회와 재생성 2회 제한은 사진별 프론트 React 상태에서만 관리하고 실패한 요청도 차감합니다. 편집 화면 재진입·추천 초기화·추가 보호 시 유지되며 새 입력이나 페이지 새로고침 시 초기화됩니다. 서버의 호출 제한은 아니므로 API 직접 호출은 제한하지 않습니다. 이미지는 메모리로만 처리하고 결과 영역 PNG를 `no-store`로 반환합니다.
+
+기본 모델 및 REST 형식은 [Google 이미지 생성 문서](https://ai.google.dev/gemini-api/docs/generate-content/image-generation)를 기준으로 연결했습니다. 실제 호출은 실행하지 않았으므로 프로젝트에서 사용 가능한 모델과 과금 설정을 확인해야 합니다. 키를 프론트 환경변수에 넣지 마세요. 기존 합성 자료 테스트 범위를 유지합니다.

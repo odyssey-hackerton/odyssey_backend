@@ -5,7 +5,6 @@ import Icon from "./Icon";
 interface Props {
   photos: Photo[];
   text: string;
-  demo: boolean;
   busy: boolean;
   onFiles: (files: File[]) => void;
   onRemove: (index: number) => void;
@@ -17,7 +16,6 @@ interface Props {
 export default function InputPanel({
   photos,
   text,
-  demo,
   busy,
   onFiles,
   onRemove,
@@ -35,8 +33,8 @@ export default function InputPanel({
             <Icon name="image" />
           </span>
           <div>
-            <h2>사진을 추가해 주세요</h2>
-            <p>사진과 함께 올릴 글을 한 번에 확인해요.</p>
+            <h2>게시할 사진과 글</h2>
+            <p>사진 최대 4장과 함께 올릴 글을 한 번에 확인해요.</p>
           </div>
         </div>
         <input
@@ -44,7 +42,7 @@ export default function InputPanel({
           className="visually-hidden"
           type="file"
           accept="image/jpeg,image/png,image/webp"
-          multiple={demo}
+          multiple
           aria-label="사진 파일 선택"
           disabled={busy}
           onChange={(e) => {
@@ -73,7 +71,7 @@ export default function InputPanel({
           <strong>
             사진을 끌어다 놓거나 <span>파일 선택</span>
           </strong>
-          <small>JPG, PNG, WebP · 한 장당 10MB · 최대 {demo ? 4 : 1}장</small>
+          <small>JPG, PNG, WebP · 한 장당 10MB · 최대 4장</small>
         </button>
         {photos.length > 0 && (
           <div className="upload-thumbs">
@@ -91,7 +89,7 @@ export default function InputPanel({
                 </button>
               </div>
             ))}
-            {photos.length < (demo ? 4 : 1) && (
+            {photos.length < 4 && (
               <button
                 className="add-photo"
                 aria-label="사진 추가"
@@ -143,16 +141,15 @@ export default function InputPanel({
             disabled={busy}
             onClick={onSample}
           >
-            데모 예시 사진 사용하기
+            예시 사진 사용하기
             <Icon name="arrow" size={16} />
           </button>
         </div>
         <div className="privacy-note">
           <Icon name="lock" size={18} />
           <p>
-            {demo
-              ? "화면 데모에서는 사진과 글을 서버에 보내지 않아요. 새로고침하면 작업이 사라져요."
-              : "분석 후 서버 원본을 삭제하고, 편집할 때 이 화면의 사진을 다시 전송해요. 새로고침하면 사진을 다시 선택해야 해요."}
+            사진과 글은 분석을 위해 서버와 AI로 보내요. 서버의 원본 사진은 분석 직후 지우고, 편집할
+            때 이 화면의 사진을 다시 보내요. 새로고침하면 사진을 다시 선택해야 해요.
           </p>
         </div>
       </aside>

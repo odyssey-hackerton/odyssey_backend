@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# HTTPS 인증서·개인키 (scripts/make-cert.sh)
+certs/
 
 # 프론트
 node_modules/
