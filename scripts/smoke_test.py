@@ -2,8 +2,10 @@
 
 업로드 → SSE 진행 상황 → 결과 URL → 리포트까지 확인한다. 워커(Mock 또는 실제 AI)가 떠 있어야 한다.
 
-    uv run python scripts/smoke_test.py http://localhost        # Nginx 경유
     uv run python scripts/smoke_test.py http://localhost:8000   # API 직접
+
+    # Nginx 경유 (mkcert 인증서)
+    SSL_CERT_FILE=certs/rootCA.pem uv run python scripts/smoke_test.py https://10.1.1.27
 """
 
 import io

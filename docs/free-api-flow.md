@@ -36,7 +36,7 @@ uv run python -m worker.main
 ```sh
 cd odyssey_backend/frontend
 npm ci
-VITE_API_TARGET=http://10.1.1.27 npm run dev
+VITE_API_TARGET=https://10.1.1.27 npm run dev
 ```
 
 위 주소는 기존 테스트 서버다. 로컬 API를 쓰면 `VITE_API_TARGET=http://localhost:8000`으로 바꾼다. 이번 코드가 반영되지 않은 서버에 UI만 연결해도 새 AI 기능이 생기는 것은 아니다.
@@ -54,7 +54,7 @@ CLI로도 합성 사진+본문 → 사용자 선택 대기 → 추천 보호 적
 
 ```sh
 cd odyssey_backend
-uv run python scripts/smoke_test.py http://10.1.1.27
+SSL_CERT_FILE=certs/rootCA.pem uv run python scripts/smoke_test.py https://10.1.1.27
 ```
 
 첫 구동의 범위는 사진 1장+본문이다. 여러 사진의 실제 API 처리, 생성 미리보기·재생성·적용 버전, 추가 자연어 요청은 아직 구현하지 않았다. 사진 편집 시 메타데이터를 제거하며 `remove`는 자연스러운 인페인팅이 아니다. 자동 탐지가 놓치는 정보가 있을 수 있으므로 DONE을 안전 보증으로 표시하지 않는다.

@@ -27,7 +27,7 @@ uv run ruff check . && uv run ruff format --check . && uv run pytest
 ```bash
 cd frontend
 npm install
-VITE_API_TARGET=http://10.1.1.27 npm run dev   # 서버 API 사용 (VPN 필요), http://localhost:5173
+VITE_API_TARGET=https://10.1.1.27 npm run dev   # 서버 API 사용 (VPN 필요), http://localhost:5173
 npm run dev                                     # 로컬 백엔드(localhost:8000) 사용
 npm test
 npm run build   # 타입 검사 + 빌드 확인
@@ -92,7 +92,7 @@ Apple Silicon Mac에서도 서버용 `linux/amd64`로 빌드됩니다. Docker Hu
 
 ### 3. 서버 준비 (한 번만)
 
-Docker는 [공식 문서의 Ubuntu apt 저장소 방식](https://docs.docker.com/engine/install/ubuntu/)으로 설치하고, `sudo usermod -aG docker $USER` 후 다시 접속합니다. 서버에는 `docker-compose.yml`, 앱 `.env`, `litellm/config.yaml`, `litellm/.env`가 필요합니다. LiteLLM 환경 파일은 아래 [설정 절차](#litellm-프록시)를 따라 준비합니다.
+Docker는 [공식 문서의 Ubuntu apt 저장소 방식](https://docs.docker.com/engine/install/ubuntu/)으로 설치하고, `sudo usermod -aG docker $USER` 후 다시 접속합니다. 서버에는 `docker-compose.yml`, 앱 `.env`, `certs/`(HTTPS 인증서), `litellm/config.yaml`, `litellm/.env`가 필요합니다. 인증서는 아래 [HTTPS 인증서](#https-인증서-한-번만) 절차로 만듭니다. LiteLLM 환경 파일은 아래 [설정 절차](#litellm-프록시)를 따라 준비합니다.
 
 ```bash
 # 로컬에서
@@ -113,12 +113,35 @@ vi .env
 | `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | 버킷 이름, API 서버용 IAM 키 |
 | `COMPOSE_PROFILES` | AI 워커가 붙기 전까지 `mock`, 붙으면 줄 삭제 |
 
+#### HTTPS 인증서 (한 번만)
+
+사설 IP는 Let's Encrypt 등 공인 CA가 발급하지 않으므로 [mkcert](https://github.com/FiloSottile/mkcert) 인증서를 씁니다. Nginx가 443에서 HTTPS를 처리하고 80은 HTTPS로 돌려보냅니다. 파일 공유(Web Share)는 HTTPS에서만 동작합니다.
+
+1. 인증서 만들기 (로컬 PC, 한 번만. 유효기간 약 2년)
+
+   ```bash
+   brew install mkcert                 # macOS
+   ./scripts/make-cert.sh 10.1.1.27    # 서버 사설 IP. 이 PC에는 루트 CA가 자동 설치됨
+   ssh -p <SSH포트> <사용자>@<서버주소> 'mkdir -p ~/odyssey/certs'
+   scp -P <SSH포트> certs/cert.pem certs/key.pem <사용자>@<서버주소>:~/odyssey/certs/
+   ```
+
+2. 접속할 다른 PC에 `certs/rootCA.pem` 설치 (안 하면 브라우저 경고)
+   - macOS: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain rootCA.pem`
+   - Windows: 파일 이름을 `rootCA.crt`로 바꿔 더블클릭 → 인증서 설치 → 로컬 컴퓨터 → "신뢰할 수 있는 루트 인증 기관"
+   - Firefox는 OS 저장소를 안 쓸 수 있어 설정 → 인증서 → 가져오기
+   - 휴대폰 시연 시: 파일을 보내 프로필/인증서로 설치 후 iOS는 설정 → 일반 → 정보 → 인증서 신뢰 설정에서 켭니다.
+
+3. NCP ACG에서 VPN 대역 → TCP 443 인바운드를 허용합니다.
+
+`rootCA.pem`은 공개 인증서라 팀원에게 보내도 됩니다. 루트 CA **개인키**(`mkcert -CAROOT` 폴더의 `rootCA-key.pem`)는 만든 PC 밖으로 내보내지 않습니다. 서버 IP가 바뀌면 1번을 다시 실행합니다.
+
 ### 4. 배포·롤백 (서버)
 
 ```bash
 cd ~/odyssey
 docker compose --env-file .env --env-file litellm/.env pull && docker compose --env-file .env --env-file litellm/.env up -d
-curl "http://localhost/api/health?deep=true"   # db, redis, s3 모두 true면 정상
+curl -k "https://localhost/api/health?deep=true"   # db, redis, s3 모두 true면 정상 (-k: 인증서가 localhost가 아니라 사설 IP용)
 ```
 
 롤백은 `.env`의 `IMAGE_TAG`를 이전 태그로 바꾸고 같은 명령을 실행합니다. DB 마이그레이션은 API 컨테이너가 시작할 때 자동으로 적용됩니다.
@@ -306,7 +329,7 @@ docker compose --env-file .env --env-file litellm/.env stop litellm litellm-db
 
 ## API
 
-자세한 요청·응답 형식과 예시는 Swagger 문서(`http://10.1.1.27/docs`)에 있습니다.
+자세한 요청·응답 형식과 예시는 Swagger 문서(`https://10.1.1.27/docs`)에 있습니다.
 
 웹 화면은 **게시물 API**를 씁니다. 게시물 = 사진 최대 4장 + 글이고, 서버가 사진마다 작업(job)을 하나씩 만들어 묶습니다. 글은 0번 사진 작업과 함께 분석됩니다. AI 워커와의 메시지 형식은 바뀌지 않습니다.
 

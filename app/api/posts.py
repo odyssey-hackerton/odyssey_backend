@@ -143,7 +143,7 @@ async def create_post(
     `/report`로 단서 확인 → `POST /transform` → 다시 SSE로 `done` → `/result`와 `/report`.
 
     ```bash
-    curl -X POST http://10.1.1.27/api/posts \\
+    curl -X POST https://10.1.1.27/api/posts \\
          -F files=@photo1.jpg -F files=@photo2.jpg -F "text=본문 내용"
     ```
     """
@@ -364,7 +364,7 @@ async def transform_post(
     하나라도 맞지 않으면 아무 항목도 시작하지 않는다.
 
     ```bash
-    curl -X POST http://10.1.1.27/api/posts/{post_id}/transform \\
+    curl -X POST https://10.1.1.27/api/posts/{post_id}/transform \\
          -F files=@photo1.jpg -F files=@photo2.jpg \\
          -F 'choices=[{"position": 0, "idx": 0, "action": "blur"}]'
     ```
